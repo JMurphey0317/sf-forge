@@ -274,7 +274,7 @@ zip -r sf-forge-vX.Y.Z.zip sf-forge/ -x "*.git*" -x "*.bak"
 
 ## Contributing
 
-SF Forge is an internal tool for Trusted Tech Team. For bugs or feature requests, open a GitHub issue using the provided templates.
+SF Forge is a one stop shop for Salesforce Admins and Developers alike. For bugs or feature requests, open a GitHub issue using the provided templates.
 
 **Style conventions:**
 - All Apex file headers follow the Jon Murphey standard (Class Name, Author, Created, Modified, Description, Change History table)
@@ -284,5 +284,5 @@ SF Forge is an internal tool for Trusted Tech Team. For bugs or feature requests
 ---
 
 <div align="center">
-  <sub>Built and maintained by <strong>Jon-Michael Murphey</strong> · <strong>Trusted Tech Team</strong> · Dark Fenrir Forge</sub>
+  <sub>Built and maintained by <strong>Jon-Michael Murphey</strong> · Dark Fenrir Forge</sub>
 </div>
