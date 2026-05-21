@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SF Forge</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main class="popup">
+    <header>
+      <img src="../../assets/icons/icon48.png" alt="SF Forge">
+      <div><h1>SF Forge</h1><p>Dark Fenrir Forge</p></div>
+    </header>
+    <section id="status" class="status">Scanning open Salesforce tabs…</section>
+    <section id="orgList" class="org-list"></section>
+    <button id="openApp" title="Open the full SF Forge workspace">Open DevTools Workspace</button>
+    <button id="openSidePanel" title="Open SF Forge in Chrome side panel for a persistent workflow">Open Side Panel</button>
+    <button id="toggleLens" title="Toggle Lightning component hover labels on the selected Salesforce tab">Toggle LWC Lens</button>
+    <footer>Inspector • Metadata • Logs • Flow • Lens</footer>
+  </main>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

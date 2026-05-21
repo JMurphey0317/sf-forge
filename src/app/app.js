@@ -1,0 +1,2934 @@
+/**
+ * SF Forge App v5.0.0
+ *
+ * Enhancement summary (all 16 recommendations implemented):
+ *
+ * SECURITY
+ *  1. Credential encryption: vault entries encrypted via AES-GCM + PBKDF2 passphrase on first save
+ *  2. CSP added to manifest.json (script-src 'self'; object-src 'self')
+ *  3. host_permissions scoped to /services/* in manifest.json
+ *
+ * UX
+ *  4. Keyboard shortcuts: Ctrl+Enter = run active view action; Alt+1-9 = nav switch
+ *  5. SOQL history (last 20 per org) + named saved queries + result column sort
+ *  6. Toast: error detail copy button; action undo for destructive ops
+ *  7. Org color tag shown as colored left-border in active org lock bar
+ *  8. Workspace: per-object SOQL templates with "Run in Inspector" shortcut
+ *
+ * API / RELIABILITY
+ *  9. Alarm-based session auto-refresh every 90 min (in service-worker.js)
+ * 10. API version bumped to v66.0; per-org version override in Connect Org vault
+ * 11. Rate-limit retry: exponential back-off on 429/503 in request()
+ *
+ * NEW FEATURES
+ * 12. Metadata Studio: inline Edit & Save Apex/Trigger body via Tooling API
+ * 13. Org Diff: field-level comparison with added/removed/changed field counts
+ * 14. Agentforce / Einstein Copilot inspector (BotDefinition, BotVersion, BotAction)
+ * 15. Permission Inspector: field-level security (FLS) grid per object
+ *
+ * CODE QUALITY
+ * 16. app.js modularised — each view function is self-contained with lazy data
+ *
+ * BUG FIX
+ *  - copyExceptionSummary syntax error (line 931 in v4): text.split('\n') now uses
+ *    a template-literal-safe escaped newline constant — no more split-across-line
+ *    tokenization issues in packed builds.
+ */
+
+import { SalesforceApi, downloadJson, toCsv, detectAndEnrichOrgs, safeLike } from './modules/salesforce-api.js';
+import {
+  readProfiles, updateOrgProfile, mergeOrgIntoProfiles,
+  recheckSessionHealth, salesforceSoapLogin, saveStoredLoginProfile,
+  readCredentialProfiles, refreshStoredLoginProfile, recheckStoredSessionHealth
+} from './modules/org-manager.js';
+import { getUpdateState, dismissUpdate, saveRepoConfig, getRepoConfig, checkForUpdates } from './modules/update-checker.js';
+
+// ── Navigation definition ─────────────────────────────────────────────────────
+const navItems = [
+  ['dashboard',  'Dashboard',              'Org health and shortcuts'],
+  ['connect',    'Connect Org',            'Production/Sandbox login vault'],
+  ['inspector',  'Inspector',              'Objects, fields, SOQL'],
+  ['rest',       'REST Explorer',          'API requests'],
+  ['metadata',   'Metadata Studio',        'Apex/LWC/Aura/Flows'],
+  ['logs',       'Debug Logs',             'Readable debug logs'],
+  ['flow',       'Flow Analyzer',          'Flow metadata breakdown'],
+  ['lens',       'LWC Lens',               'Component overlay'],
+  ['bulk',       'Bulk Field Creator',     'Create fields from CSV or grid'],
+  ['permissions','Permission Inspector',   'Compare profile and permission set access'],
+  ['orgdiff',    'Org Diff',              'Compare metadata between orgs'],
+  ['deploy',     'Deployment Assistant',   'Package.xml and deployment preview'],
+  ['agents',     'Agentforce Inspector',   'Bots, topics, and actions'],
+  ['limits',     'API Limits',              'Org limits and usage trends'],
+  ['jobs',       'Apex Job Monitor',        'Scheduled and batch Apex jobs'],
+  ['traceflags', 'Trace Flag Manager',      'Set debug log trace flags'],
+  ['security',   'Security Health Scan',    'Org security checklist'],
+  ['workspace',  'Saved Workspace',        'Favorites and recent work by org'],
+  ['themes',     'Theme Engine',           'Dark Fenrir theme and layout settings']
+];
+
+// ── App state ─────────────────────────────────────────────────────────────────
+let api      = null;
+let active   = 'dashboard';
+let orgs     = [];
+let profiles = { favorites: {}, aliases: {}, colorTags: {}, recent: [], activeOrgKey: null };
+let themeSettings = { theme: 'dark-fenrir', accent: '#8b5cf6', density: 'comfortable', scale: 'standard' };
+
+// Global SOQL history store (per org key)
+let soqlHistory = {}; // { [orgKey]: [{name, soql}] }
+
+const $    = s => document.querySelector(s);
+const view = () => $('#view');
+const NL   = '\n'; // prevent split('\n') from being tokenized across lines in minifiers
+
+// ── Theme engine ──────────────────────────────────────────────────────────────
+const THEME_PRESETS = {
+  'dark-fenrir':            { label:'Dark Fenrir Default',      bg:'#061121', panel:'#0b1830', panel2:'#111f3b', text:'#f8fafc', muted:'#a7b1c5', accent:'#8b5cf6', accent2:'#a78bfa', glow:'rgba(139,92,246,.35)' },
+  'cyber-blue':             { label:'Cyber Blue',               bg:'#04111f', panel:'#071f35', panel2:'#0b2b4d', text:'#eff6ff', muted:'#9cc8e8', accent:'#0ea5e9', accent2:'#38bdf8', glow:'rgba(56,189,248,.38)' },
+  'ember-forge':            { label:'Ember Forge',              bg:'#170b06', panel:'#26110a', panel2:'#3a1b0f', text:'#fff7ed', muted:'#fdba74', accent:'#f97316', accent2:'#fbbf24', glow:'rgba(249,115,22,.32)' },
+  'midnight-neon':          { label:'Midnight Neon',            bg:'#050816', panel:'#0d1028', panel2:'#151940', text:'#f5f3ff', muted:'#c4b5fd', accent:'#d946ef', accent2:'#22d3ee', glow:'rgba(217,70,239,.34)' },
+  'salesforce-classic-dark':{ label:'Salesforce Classic Dark',  bg:'#071923', panel:'#0d2b3d', panel2:'#123d57', text:'#f0f9ff', muted:'#bae6fd', accent:'#00a1e0', accent2:'#7dd3fc', glow:'rgba(0,161,224,.30)' },
+  'oled-black':             { label:'OLED Black',               bg:'#000000', panel:'#050505', panel2:'#101010', text:'#ffffff', muted:'#a3a3a3', accent:'#7c3aed', accent2:'#c084fc', glow:'rgba(124,58,237,.30)' }
+};
+async function loadThemeSettings() {
+  const { sfForgeTheme = {} } = await chrome.storage.local.get('sfForgeTheme');
+  themeSettings = { ...themeSettings, ...sfForgeTheme };
+  applyTheme();
+}
+function applyTheme() {
+  const preset = THEME_PRESETS[themeSettings.theme] || THEME_PRESETS['dark-fenrir'];
+  const root   = document.documentElement;
+  const accent = themeSettings.accent || preset.accent;
+  root.style.setProperty('--bg',          preset.bg);
+  root.style.setProperty('--panel',       preset.panel);
+  root.style.setProperty('--panel2',      preset.panel2);
+  root.style.setProperty('--text',        preset.text);
+  root.style.setProperty('--muted',       preset.muted);
+  root.style.setProperty('--purple',      accent);
+  root.style.setProperty('--purple2',     preset.accent2);
+  root.style.setProperty('--cyan',        preset.accent2);
+  root.style.setProperty('--theme-glow',  preset.glow);
+  document.body.dataset.theme   = themeSettings.theme;
+  document.body.dataset.density = themeSettings.density || 'comfortable';
+  document.body.dataset.scale   = themeSettings.scale   || 'standard';
+}
+async function saveThemeSettings(next) {
+  themeSettings = { ...themeSettings, ...next };
+  await chrome.storage.local.set({ sfForgeTheme: themeSettings });
+  applyTheme();
+}
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+function toast(msg, duration = 2800, opts = {}) {
+  const t = $('#toast');
+  t.textContent = msg;
+  if (opts.copyText) {
+    const btn = document.createElement('button');
+    btn.className = 'toast-copy-btn';
+    btn.textContent = 'Copy error';
+    btn.onclick = () => navigator.clipboard.writeText(opts.copyText).then(() => { btn.textContent = 'Copied!'; });
+    t.appendChild(btn);
+  }
+  if (opts.undoFn) {
+    const btn = document.createElement('button');
+    btn.className = 'toast-copy-btn';
+    btn.textContent = 'Undo';
+    btn.onclick = () => { opts.undoFn(); t.classList.remove('show'); };
+    t.appendChild(btn);
+  }
+  t.classList.add('show');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.remove('show'), duration);
+}
+
+function setHeader(title, help) {
+  $('#pageTitle').textContent = title;
+  $('#pageHelp').textContent  = help;
+  renderActiveOrgLock();
+}
+
+function activeOrgLabel() {
+  const o = api?.org;
+  return o ? (o.alias || o.orgName || o.username || o.hostname || api.orgUrl || 'Connected org') : 'No active org';
+}
+
+// Enhancement #7: color tag reflected in active org lock bar
+function renderActiveOrgLock() {
+  let el = $('#activeOrgLock');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'activeOrgLock';
+    const topbar = document.querySelector('.topbar');
+    if (topbar) topbar.insertAdjacentElement('afterend', el);
+  }
+  const org = api?.org;
+  const colorTag = org?.colorTag || 'purple';
+  const colorMap = { red:'#ef4444', amber:'#f59e0b', green:'#22c55e', blue:'#3b82f6', purple:'#8b5cf6' };
+  const dotColor = colorMap[colorTag] || colorMap.purple;
+  el.className = `active-org-lock ${org ? 'connected' : 'disconnected'}`;
+  el.style.borderLeft = org ? `3px solid ${dotColor}` : '';
+  el.innerHTML = org
+    ? `<span class="lock-dot" style="background:${dotColor}"></span><b>Active Org:</b> ${escapeHtml(activeOrgLabel())} <span class="muted">${escapeHtml(org.type || '')} • all tools target this org only</span>`
+    : `<span class="lock-dot"></span><b>No active org selected.</b> Use Connect Org or Use Org from Smart Sessions.`;
+}
+
+function pre(data) {
+  return `<pre class="result">${escapeHtml(typeof data === 'string' ? data : JSON.stringify(data, null, 2))}</pre>`;
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c =>
+    ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])
+  );
+}
+
+function timeAgo(dateStr) {
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const m = Math.floor(diff / 60000);
+  if (m < 1)  return 'just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+function requireApi() {
+  if (!api) throw new Error('Connect to a Salesforce org first.');
+  return api;
+}
+
+// ── Navigation ────────────────────────────────────────────────────────────────
+function renderNav() {
+  const groups = [
+    ['Command Center',   ['dashboard','connect','workspace','themes']],
+    ['Build & Inspect',  ['inspector','metadata','bulk','flow','lens']],
+    ['Operate & Secure', ['logs','permissions','orgdiff','deploy','rest','limits','jobs','traceflags','security']],
+    ['Agentforce',       ['agents']]
+  ];
+  const byId = Object.fromEntries(navItems.map(i => [i[0], i]));
+  const html = groups.map(([group, ids]) => `
+    <div class="nav-group">
+      <div class="nav-group-title">${group}</div>
+      ${ids.filter(id => byId[id]).map(id => {
+        const [key, label, tip] = byId[id];
+        const badge = { dashboard:'Home', connect:'Org', workspace:'Saved', agents:'NEW' }[key] || 'Tool';
+        return `<button class="navbtn ${active === key ? 'active' : ''}" data-id="${key}" title="${tip}">
+          <span>${label}</span><span class="pill">${badge}</span>
+        </button>`;
+      }).join('')}
+    </div>`).join('');
+  const nav = $('#nav');
+  if (nav) nav.innerHTML = html;
+  document.querySelectorAll('.navbtn').forEach(b => b.onclick = () => { active = b.dataset.id; render(); });
+}
+
+// Enhancement #4: keyboard shortcuts
+function setupKeyboardShortcuts() {
+  document.addEventListener('keydown', e => {
+    // Ctrl+Enter = run active view primary action
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      const primaryBtns = ['#runSoql','#sendRest','#runAnon','#searchMd','#runPermCompare','#runOrgDiff'];
+      for (const sel of primaryBtns) {
+        const btn = $(sel);
+        if (btn) { btn.click(); e.preventDefault(); break; }
+      }
+    }
+    // Alt+1–9 = switch nav items
+    if (e.altKey && e.key >= '1' && e.key <= '9') {
+      const idx = parseInt(e.key) - 1;
+      if (navItems[idx]) { active = navItems[idx][0]; render(); e.preventDefault(); }
+    }
+  });
+}
+
+// ── Org management ────────────────────────────────────────────────────────────
+async function refreshOrgs() {
+  profiles = await readProfiles();
+  orgs = await detectAndEnrichOrgs();
+  return orgs;
+}
+
+async function connect(org = null) {
+  const badge = $('#orgBadge');
+  badge.className = 'badge warn';
+  badge.textContent = 'Connecting…';
+  try {
+    if (!org) {
+      const stored = await readCredentialProfiles();
+      const storedChoice = (stored.orgs || []).find(o => o.key === stored.activeKey) || (stored.orgs || [])[0];
+      if (storedChoice?.sessionId) {
+        api = await SalesforceApi.fromStoredProfile(storedChoice);
+        const h = await recheckStoredSessionHealth(api.org);
+        if (!h.apiOk && api.org.savedCredentials) {
+          const fresh = await refreshStoredLoginProfile(api.org);
+          api = await SalesforceApi.fromStoredProfile(fresh);
+        } else if (!h.apiOk) {
+          throw new Error('Stored session expired. Open Connect Org and sign in again, or save credentials for one-click refresh.');
+        }
+        badge.className   = 'badge ok';
+        badge.textContent = 'API Available';
+        toast(`Connected to ${api.org.alias || api.org.username || api.org.hostname}`);
+        render();
+        return;
+      }
+    }
+    await refreshOrgs();
+    const chosen = org || orgs.find(o => o.key === profiles.activeOrgKey) || orgs.find(o => o.active) || orgs[0];
+    if (!chosen) throw new Error('No stored org profile or Salesforce tab found. Click Connect Org to sign in.');
+    api = await SalesforceApi.fromOrg(chosen);
+    await mergeOrgIntoProfiles(chosen);
+    badge.className   = chosen.status === 'active' && chosen.apiAvailable ? 'badge ok' : 'badge warn';
+    badge.textContent = chosen.apiAvailable ? 'API Available' : 'Session Check';
+    toast(`Connected to ${chosen.alias || chosen.hostname}`);
+    render();
+  } catch (e) {
+    badge.className   = 'badge warn';
+    badge.textContent = 'Not connected';
+    toast(e.message, 4000);
+  }
+}
+async function reconnect() { api = null; await connect(); }
+
+function openSfPath(path) {
+  if (!api) return toast('Connect to an org first.');
+  chrome.tabs.create({ url: `${api.orgUrl}${path}` });
+}
+
+function orgHealthBadge(org) {
+  if (org.status === 'active' && org.apiAvailable)
+    return '<span class="badge ok">Active Session</span> <span class="badge ok">API Available</span>';
+  if (org.status === 'expired')
+    return '<span class="badge danger">Expired</span> <span class="badge warn">API Unavailable</span>';
+  return '<span class="badge warn">Session Unknown</span>';
+}
+
+// ── SOQL history helpers (Enhancement #5) ────────────────────────────────────
+async function loadSoqlHistory() {
+  const orgKey = api?.key || 'global';
+  const store  = await chrome.storage.local.get('sfForgeSoqlHistory');
+  soqlHistory  = store.sfForgeSoqlHistory || {};
+  return soqlHistory[orgKey] || [];
+}
+
+async function pushSoqlHistory(soql, name = '') {
+  const orgKey = api?.key || 'global';
+  const store  = await chrome.storage.local.get('sfForgeSoqlHistory');
+  const all    = store.sfForgeSoqlHistory || {};
+  const entries = all[orgKey] || [];
+  // Remove duplicate
+  const filtered = entries.filter(e => e.soql !== soql);
+  filtered.unshift({ soql, name: name || soql.substring(0, 60), ts: Date.now() });
+  all[orgKey] = filtered.slice(0, 20);
+  await chrome.storage.local.set({ sfForgeSoqlHistory: all });
+  soqlHistory = all;
+}
+
+function renderSoqlHistoryDropdown(entries) {
+  if (!entries.length) return '<option value="">— No history —</option>';
+  return `<option value="">— Recent queries —</option>` +
+    entries.map((e, i) => `<option value="${i}">${escapeHtml(e.name || e.soql.substring(0, 60))}</option>`).join('');
+}
+
+// ── Render router ─────────────────────────────────────────────────────────────
+async function render() {
+  try {
+    // Clean up any polling timers from previous views
+    if (window._limitsCleanup) { window._limitsCleanup(); window._limitsCleanup = null; }
+    if (window._jobsCleanup)   { window._jobsCleanup();   window._jobsCleanup   = null; }
+    renderNav();
+    // Sync topbar badge to real connection state on every render
+    const badge = $('#orgBadge');
+    if (badge) {
+      if (api?.org?.apiAvailable) {
+        badge.className = 'badge ok';
+        badge.textContent = api.org.alias || api.org.orgName || api.org.username || 'Connected';
+      } else if (api) {
+        badge.className = 'badge warn';
+        badge.textContent = 'Session Check';
+      } else {
+        badge.className = 'badge warn';
+        badge.textContent = 'Not connected';
+      }
+    }
+    const item = navItems.find(i => i[0] === active) || navItems[0];
+    active = item[0];
+    setHeader(item[1], item[2]);
+    const routes = {
+      dashboard, connect: connectView, inspector, rest, metadata, logs, flow, lens,
+      bulk, permissions, orgdiff, deploy, agents, workspace, themes: themeEngine,
+      limits: limitsView, jobs: jobMonitor, traceflags: traceFlagManager, security: securityScan
+    };
+    const fn = routes[active] || dashboard;
+    await fn();
+  } catch (e) {
+    console.error('SF Forge render failed', e);
+    const v = view();
+    if (v) v.innerHTML = `<section class="card"><h3>SF Forge could not render this view</h3><p class="error-note">${escapeHtml(e.message || e)}</p><div class="toolbar"><button id="recoverDashboard">Return to Dashboard</button></div></section>`;
+    const b = document.querySelector('#recoverDashboard');
+    if (b) b.onclick = () => { active = 'dashboard'; render(); };
+    toast(e.message || 'Render error', 5000);
+  }
+}
+
+// ── Connect Org view ──────────────────────────────────────────────────────────
+async function connectView() {
+  const stored = await readCredentialProfiles();
+  const rows   = stored.orgs || [];
+  view().innerHTML = `<div class="grid">
+    <section class="card span6">
+      <h3>Connect to Org <span class="badge info">Production / Sandbox</span></h3>
+      <p class="muted">Sign in directly. SF Forge stores the org profile locally — no open tab required for reconnect.</p>
+      <div class="notice"><b>Recommended:</b> OAuth-ready connection model. Enter a Connected App Client ID below to use browser-based OAuth instead of storing passwords.</div>
+      <div class="field"><label>OAuth Client ID <span class="muted">optional</span></label><input id="oauthClientId" placeholder="Salesforce Connected App Consumer Key"></div>
+      <div class="toolbar"><button class="secondary" id="startOAuth">Start OAuth Login</button></div>
+      <div class="field"><label>Org Type</label><select id="loginType"><option value="production">Production / Developer</option><option value="sandbox">Sandbox</option></select></div>
+      <div class="field"><label>Username</label><input id="loginUsername" autocomplete="username" placeholder="name@example.com"></div>
+      <div class="field"><label>Password</label><input id="loginPassword" type="password" autocomplete="current-password" placeholder="Salesforce password"></div>
+      <div class="field"><label>Security Token <span class="muted">(often required)</span></label><input id="loginToken" type="password" placeholder="Appended to password automatically"></div>
+      <div class="field"><label>Org Alias</label><input id="loginAlias" placeholder="Full SB, Prod, UAT, Dev"></div>
+      <div class="field"><label>Color Tag</label><select id="loginColor"><option>purple</option><option>blue</option><option selected>amber</option><option>red</option><option>green</option></select></div>
+      <div class="field"><label>API Version Override <span class="muted">optional — default v66.0</span></label><input id="loginApiVersion" placeholder="v66.0"></div>
+      <label class="checkline"><input id="rememberCreds" type="checkbox"> Remember credentials locally for one-click refresh</label>
+      <small class="muted">Salesforce MFA/SSO may block username+password login. When blocked, use browser-tab detection instead.</small>
+      <div class="toolbar"><button id="doLogin">Connect &amp; Save Org</button><button class="secondary" id="detectTabsFromConnect">Detect Open Tabs Instead</button></div>
+      <div id="loginResult"></div>
+    </section>
+    <section class="card span6">
+      <h3>Stored Org Vault <span class="badge info">Local</span></h3>
+      <p class="muted">Profiles stored in this Chrome profile only. Passwords only stored when credential refresh is enabled.</p>
+      <div id="storedVault">${renderStoredVault(rows, stored.activeKey)}</div>
+    </section>
+  </div>`;
+
+  $('#startOAuth').onclick = async () => {
+    const clientId = $('#oauthClientId').value.trim();
+    const loginType = $('#loginType').value;
+    if (!clientId) return toast('Enter a Salesforce Connected App Client ID first.');
+    const loginBase   = loginType === 'sandbox' ? 'https://test.salesforce.com' : 'https://login.salesforce.com';
+    const redirectUri = chrome.identity?.getRedirectURL ? chrome.identity.getRedirectURL('sf-forge') : chrome.runtime.getURL('src/app/index.html');
+    const authUrl = `${loginBase}/services/oauth2/authorize?response_type=token&client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent('api refresh_token web')}&prompt=login`;
+    await chrome.storage.local.set({ sfForgeOAuthClientId: clientId });
+    chrome.tabs.create({ url: authUrl });
+    toast('OAuth login opened in new tab.');
+  };
+
+  $('#doLogin').onclick = async () => {
+    const btn = $('#doLogin');
+    btn.disabled = true; btn.textContent = 'Connecting…';
+    try {
+      const loginType  = $('#loginType').value;
+      const username   = $('#loginUsername').value.trim();
+      const password   = $('#loginPassword').value;
+      const secToken   = $('#loginToken').value;
+      const alias      = $('#loginAlias').value.trim();
+      const colorTag   = $('#loginColor').value;
+      const apiVersion = ($('#loginApiVersion').value.trim()) || 'v66.0';
+      const remember   = $('#rememberCreds').checked;
+      if (!username || !password) throw new Error('Username and password are required.');
+      // salesforceSoapLogin expects a single options object
+      const soapResult = await salesforceSoapLogin({
+        username, password, securityToken: secToken, loginType
+      });
+      // saveStoredLoginProfile(profile, options) — two separate args
+      const profile = await saveStoredLoginProfile(
+        { ...soapResult, apiVersion },
+        {
+          alias, colorTag,
+          rememberCredentials: remember,
+          password: remember ? password : '',
+          securityToken: remember ? secToken : ''
+        }
+      );
+      api = await SalesforceApi.fromStoredProfile(profile);
+      $('#loginResult').innerHTML = `<p class="badge ok">Connected: ${escapeHtml(alias || username)}</p>`;
+      toast(`Stored org connected: ${alias || username}`);
+      render();
+    } catch (e) {
+      $('#loginResult').innerHTML = `<p class="error-note">${escapeHtml(e.message)}</p>`;
+    } finally {
+      btn.disabled = false; btn.textContent = 'Connect & Save Org';
+    }
+  };
+
+  $('#detectTabsFromConnect').onclick = async () => {
+    await refreshOrgs();
+    if (!orgs.length) return toast('No Salesforce tabs found. Open a Salesforce org tab first.');
+    active = 'dashboard'; render();
+  };
+
+  document.querySelectorAll('[data-use-stored]').forEach(btn =>
+    btn.onclick = async () => {
+      try {
+        const p = (await readCredentialProfiles()).orgs?.find(o => o.key === btn.dataset.useStored);
+        if (!p) return toast('Org profile not found.');
+        api = await SalesforceApi.fromStoredProfile(p);
+        toast(`Active org: ${p.alias || p.username || p.hostname}`);
+        render();
+      } catch (e) { toast(e.message, 4000); }
+    }
+  );
+
+  document.querySelectorAll('[data-delete-stored]').forEach(btn =>
+    btn.onclick = async () => {
+      if (!confirm('Delete this stored org?')) return;
+      const key  = btn.dataset.deleteStored;
+      const data = await readCredentialProfiles();
+      const prev = data.orgs?.find(o => o.key === key);
+      data.orgs  = (data.orgs || []).filter(o => o.key !== key);
+      if (data.activeKey === key) data.activeKey = data.orgs[0]?.key || null;
+      await chrome.storage.local.set({ sfForgeCredentialProfiles: data });
+      toast('Stored org deleted.', 2800, {
+        undoFn: async () => {
+          if (prev) {
+            const d2 = await readCredentialProfiles();
+            d2.orgs = [...(d2.orgs || []), prev];
+            await chrome.storage.local.set({ sfForgeCredentialProfiles: d2 });
+            connectView();
+          }
+        }
+      });
+      connectView();
+    }
+  );
+}
+
+function renderStoredVault(rows, activeKey) {
+  if (!rows.length) return '<p class="muted">No stored org profiles yet. Connect an org above to save it.</p>';
+  return `<div class="org-grid">${rows.map(org => `
+    <article class="org-tile color-${org.colorTag || 'purple'}">
+      <div class="org-tile-head">
+        <div><h4>${escapeHtml(org.alias || org.orgName || org.hostname)}</h4>
+          <p class="muted">${escapeHtml(org.username || org.orgId || '')}</p></div>
+        ${org.key === activeKey ? '<span class="badge ok">Active</span>' : ''}
+      </div>
+      <p class="muted" style="font-size:11px">${escapeHtml(org.instanceUrl || '')} • API ${escapeHtml(org.apiVersion || 'v66.0')}</p>
+      <div class="toolbar">
+        <button data-use-stored="${escapeHtml(org.key)}">Use Org</button>
+        <button class="danger" data-delete-stored="${escapeHtml(org.key)}">Delete</button>
+      </div>
+    </article>`).join('')}</div>`;
+}
+
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+async function dashboard() {
+  const storedData  = await readCredentialProfiles();
+  const storedOrgs  = (storedData.orgs || []).map(s => ({
+    ...s, connectionMode: 'stored-login', tabId: null,
+    status: s.sessionId ? 'active' : 'expired', apiAvailable: !!s.sessionId
+  }));
+  const openCount    = orgs.length;
+  const storedCount  = storedOrgs.length;
+  const activeLabel  = api ? activeOrgLabel() : 'No active org';
+
+  // Determine real connection state — api object existing ≠ session valid
+  const apiConnected  = !!api;
+  const sessionValid  = api?.org?.apiAvailable === true;
+  const sessionStatus = !api ? 'not-connected' : sessionValid ? 'ok' : 'expired';
+
+  view().innerHTML = `<div class="grid">
+    <section class="dashboard-hero">
+      <div class="hero-card">
+        <h3>Command Center</h3>
+        <p class="muted">One active org controls every SF Forge tool. Use Smart Org Sessions below to switch between Production, Sandbox, and stored profiles.</p>
+        <div class="status-strip">
+          ${sessionStatus === 'ok'           ? `<span class="badge ok">Connected</span>` : ''}
+          ${sessionStatus === 'expired'      ? `<span class="badge danger">Session Expired</span>` : ''}
+          ${sessionStatus === 'not-connected'? `<span class="badge warn">Not connected</span>` : ''}
+          <span class="badge info">Active: ${escapeHtml(activeLabel)}</span>
+          <span class="badge info">${storedCount} stored</span>
+          <span class="badge info" id="openOrgMetric">${openCount} open tabs</span>
+        </div>
+        ${sessionStatus === 'expired' ? `<div class="notice" style="margin-top:8px;border-left:3px solid #f87171">
+          <b>Session expired.</b> The org was detected from a tab that is no longer authenticated.
+          Click <b>Detect Open Tabs</b> after re-logging into Salesforce, or use
+          <b>Session Recovery</b> below to grab a fresh SID from an open tab.
+        </div>` : ''}
+        <div class="toolbar">
+          <button id="detectOrgs">Detect Open Tabs</button>
+          <button class="secondary" data-go="connect">Connect / Manage Orgs</button>
+          <button class="secondary" id="connectRecent">Connect Last Used</button>
+          <button class="secondary" id="reconnectBtn">Reconnect / Refresh</button>
+        </div>
+        <p class="muted" style="font-size:11px;margin-top:8px">Keyboard: <kbd>Alt+1–9</kbd> switch tools · <kbd>Ctrl+Enter</kbd> run active query</p>
+      </div>
+      <div class="metric-card"><b>${storedCount}</b><span>Stored Org Profiles</span><small class="muted">Use or delete profiles from the vault.</small></div>
+      <div class="metric-card"><b>${api ? '1' : '0'}</b><span>Active Target Org</span><small class="muted">All actions run against only this org.</small></div>
+    </section>
+
+    <section class="card span12" id="sessionRecoveryCard">
+      <h3>Session Recovery <span class="badge warn">Use when session has expired</span></h3>
+      <p class="muted">If you're logged into Salesforce in a tab but SF Forge shows the session as expired, use this to extract the live session cookie from that tab and reconnect without re-entering credentials.</p>
+      <div class="toolbar">
+        <button id="recoverFromTab">Extract SID from Open Tab</button>
+        <button class="secondary" id="pasteManualSid">Paste SID Manually</button>
+      </div>
+      <div id="recoveryManualFields" style="display:none">
+        <div class="field"><label>Session ID (SID)</label><input id="manualSid" type="password" placeholder="00D…"></div>
+        <div class="field"><label>Instance URL</label><input id="manualInstance" placeholder="https://yourorg.my.salesforce.com"></div>
+        <div class="field"><label>Alias</label><input id="manualAlias" placeholder="Full SB"></div>
+        <div class="field"><label>Color Tag</label><select id="manualColor"><option>amber</option><option>red</option><option>green</option><option>blue</option><option>purple</option></select></div>
+        <div class="toolbar"><button id="connectManualSid">Connect with this SID</button></div>
+      </div>
+      <div id="recoveryResult"></div>
+    </section>
+
+    <section class="card span8">
+      <h3>Smart Org Sessions <span class="badge info">Switch Target Org</span></h3>
+      <p class="muted">All open Salesforce tabs and stored org profiles appear here. Click <b>Use Org</b> to make that org the active target for the extension.</p>
+      <div id="orgCards">
+        ${storedOrgs.length ? `<p class="muted" style="font-size:12px;margin-bottom:4px">Stored org profiles:</p>${renderStoredOrgCards(storedOrgs, storedData.activeKey)}` : '<p class="muted">No stored org profiles yet.</p>'}
+        <p class="muted" style="font-size:12px;margin:10px 0 4px">Open Salesforce tabs:</p>
+        <div id="tabOrgCards"><em class="muted">Scanning tabs…</em></div>
+      </div>
+    </section>
+
+    <section class="card span4">
+      <h3>Session Health</h3>
+      <div id="healthPanel">${api ? renderHealth(api.org || {}) : '<p class="muted">Connect to view session health details.</p>'}</div>
+      ${api ? '<div class="toolbar"><button class="secondary" id="recheckHealth">Re-check Health</button></div>' : ''}
+    </section>
+
+    <section class="card span12">
+      <h3>Tool Hub</h3>
+      <div class="tool-hub">
+        <button class="tool-card" data-go="inspector"><b>Query &amp; Inspect</b><small>SOQL history, sort, objects, fields</small></button>
+        <button class="tool-card" data-go="metadata"><b>Metadata Studio</b><small>Apex edit &amp; save, LWC, Aura, Flows</small></button>
+        <button class="tool-card" data-go="bulk"><b>Bulk Field Creator</b><small>CSV, paste, validation, payload preview</small></button>
+        <button class="tool-card" data-go="logs"><b>Debug Log Viewer</b><small>Colorized logs, filters, counters</small></button>
+        <button class="tool-card" data-go="flow"><b>Flow Analyzer</b><small>Filter, compare versions, flow map</small></button>
+        <button class="tool-card" data-go="permissions"><b>Permissions + FLS</b><small>Object &amp; field-level security grid</small></button>
+        <button class="tool-card" data-go="orgdiff"><b>Org Diff</b><small>Field-level metadata compare</small></button>
+        <button class="tool-card" data-go="agents"><b>Agentforce Inspector</b><small>Bots, topics, actions</small></button>
+      </div>
+    </section>
+
+    <section class="card span12">
+      <h3>Quick Salesforce Links</h3>
+      <div class="quick-grid">
+        <button data-open="/lightning/setup/SetupOneHome/home">Open Setup</button>
+        <button data-open="/lightning/setup/ObjectManager/home">Object Manager</button>
+        <button data-open="/lightning/setup/Flows/home">Flows</button>
+        <button data-open="/lightning/setup/ApexClasses/home">Apex Classes</button>
+        <button data-open="/lightning/setup/DebugLogs/home">Debug Logs</button>
+        <button data-open="/lightning/setup/PermSets/home">Permission Sets</button>
+        <button data-open="/lightning/setup/BotVersions/home">Einstein Bots / Agents</button>
+        <button data-go="workspace">Saved Workspace</button>
+      </div>
+    </section>
+
+    <section class="card span12">
+      <h3>Recent Org History</h3>
+      <div id="recentOrgs">${renderRecent()}</div>
+    </section>
+  </div>`;
+
+  $('#detectOrgs').onclick = async () => {
+    await refreshOrgs();
+    $('#tabOrgCards').innerHTML = renderOrgCards();
+    const metric = $('#openOrgMetric'); if (metric) metric.textContent = `${orgs.length} open tabs`;
+    bindOrgCards();
+    toast(`${orgs.length} tab-org${orgs.length === 1 ? '' : 's'} detected`);
+  };
+  $('#connectRecent').onclick = () => connect();
+  $('#reconnectBtn').onclick  = () => reconnect();
+
+  // Session Recovery: extract SID from open SF tab cookie
+  $('#recoverFromTab').onclick = async () => {
+    const resEl = $('#recoveryResult');
+    resEl.innerHTML = '<p class="muted">Scanning open Salesforce tabs for active session cookie…</p>';
+    try {
+      const sfTabs = await chrome.tabs.query({});
+      const sfTab  = sfTabs.find(t => t.url && /salesforce\.com|force\.com/.test(t.url));
+      if (!sfTab) {
+        resEl.innerHTML = '<p class="error-note">No open Salesforce tabs found. Log into Salesforce in a tab first, then click Extract SID again.</p>';
+        return;
+      }
+      const tabOrigin = new URL(sfTab.url).origin;
+      // Try to read the sid cookie from the tab's origin
+      const sidCookie = await chrome.cookies.get({ url: tabOrigin + '/', name: 'sid' }).catch(() => null);
+      if (!sidCookie?.value) {
+        resEl.innerHTML = `<p class="error-note">No sid cookie found at <b>${tabOrigin}</b>. Make sure you are logged into Salesforce in the tab (not just on the login page). You may also need to manually enter the SID using "Paste SID Manually".</p>`;
+        return;
+      }
+      // Derive instance URL
+      const rawHost    = new URL(sfTab.url).hostname;
+      const instanceUrl = rawHost.includes('lightning.force.com')
+        ? `https://${rawHost.replace(/\.lightning\.force\.com$/, '.my.salesforce.com')}`
+        : tabOrigin;
+
+      // Save as a stored profile
+      const profile = await saveStoredLoginProfile(
+        {
+          sessionId:   sidCookie.value,
+          instanceUrl,
+          pageOrigin:  tabOrigin,
+          hostname:    new URL(instanceUrl).hostname,
+          username:    '',
+          tabId:       sfTab.id,
+          apiAvailable: true,
+          status:      'active'
+        },
+        { alias: 'Recovered Session', colorTag: 'amber', rememberCredentials: false }
+      );
+      api = await SalesforceApi.fromStoredProfile(profile);
+      resEl.innerHTML = `<p class="badge ok">Session recovered from tab: ${escapeHtml(tabOrigin)}</p>
+        <p class="muted" style="font-size:12px">SID extracted and stored temporarily. To persist beyond this browser session, sign in via Connect Org with credentials.</p>`;
+      toast('Session recovered — org is now active.');
+      render();
+    } catch (e) {
+      resEl.innerHTML = `<p class="error-note">${escapeHtml(e.message)}</p>`;
+    }
+  };
+
+  $('#pasteManualSid').onclick = () => {
+    const f = $('#recoveryManualFields');
+    f.style.display = f.style.display === 'none' ? '' : 'none';
+  };
+
+  $('#connectManualSid').onclick = async () => {
+    const sid          = $('#manualSid').value.trim();
+    const instanceUrl  = $('#manualInstance').value.trim();
+    const alias        = $('#manualAlias').value.trim() || 'Manual SID';
+    const colorTag     = $('#manualColor').value;
+    const resEl        = $('#recoveryResult');
+    if (!sid)         return toast('Enter a Session ID.');
+    if (!instanceUrl) return toast('Enter an Instance URL (e.g. https://yourorg.my.salesforce.com).');
+    try {
+      const profile = await saveStoredLoginProfile(
+        { sessionId: sid, instanceUrl, pageOrigin: instanceUrl, hostname: new URL(instanceUrl).hostname, username: '', apiAvailable: true, status: 'active' },
+        { alias, colorTag, rememberCredentials: false }
+      );
+      api = await SalesforceApi.fromStoredProfile(profile);
+      resEl.innerHTML = `<p class="badge ok">Connected via manual SID to ${escapeHtml(instanceUrl)}</p>`;
+      toast(`Connected: ${alias}`);
+      render();
+    } catch (e) {
+      resEl.innerHTML = `<p class="error-note">${escapeHtml(e.message)}</p>`;
+    }
+  };
+
+  const recheckBtn = $('#recheckHealth');
+  if (recheckBtn) recheckBtn.onclick = async () => {
+    if (!api?.org) return toast('Connect to an org first.');
+    try {
+      const h = api.org?.sessionId ? await recheckStoredSessionHealth(api.org) : await recheckSessionHealth(api.org);
+      // Update live api.org so topbar reflects true state
+      api.org.apiAvailable = !!h.apiOk;
+      api.org.status = h.apiOk ? 'active' : 'expired';
+      renderActiveOrgLock();
+      $('#healthPanel').innerHTML = renderDetailedHealth(api.org, h);
+      if (!h.apiOk) {
+        toast('Session is expired or API is unavailable. Use Session Recovery to reconnect.', 5000);
+      }
+    } catch (e) { toast(e.message, 4000); }
+  };
+
+  document.querySelectorAll('[data-open]').forEach(b => b.onclick = () => openSfPath(b.dataset.open));
+  document.querySelectorAll('[data-go]').forEach(b   => b.onclick = () => { active = b.dataset.go; render(); });
+  bindRecentOrgButtons();
+  bindStoredOrgCards();
+
+  refreshOrgs().then(() => {
+    const el = $('#tabOrgCards');
+    if (el) { el.innerHTML = renderOrgCards(); bindOrgCards(); }
+    const metric = $('#openOrgMetric'); if (metric) metric.textContent = `${orgs.length} open tabs`;
+  }).catch(e => {
+    const el = $('#tabOrgCards');
+    if (el) el.innerHTML = `<p class="error-note">${escapeHtml(e.message || e)}</p>`;
+  });
+}
+
+function renderStoredOrgCards(storedOrgs, activeKey) {
+  if (!storedOrgs.length) return '';
+  return `<div class="org-grid">${storedOrgs.map(org => `
+    <article class="org-tile color-${org.colorTag || 'purple'}">
+      <div class="org-tile-head">
+        <div><h4>${escapeHtml(org.alias || org.orgName || org.hostname)}</h4>
+          <p class="muted">${escapeHtml(org.username || org.orgId || '')}</p></div>
+        ${orgHealthBadge(org)}
+      </div>
+      <p class="muted" style="font-size:11px">API ${escapeHtml(org.apiVersion || 'v66.0')}</p>
+      <div class="toolbar">
+        <button data-use-stored-dash="${escapeHtml(org.key)}">Use Org</button>
+      </div>
+    </article>`).join('')}</div>`;
+}
+
+function bindStoredOrgCards() {
+  document.querySelectorAll('[data-use-stored-dash]').forEach(btn =>
+    btn.onclick = async () => {
+      try {
+        const p = (await readCredentialProfiles()).orgs?.find(o => o.key === btn.dataset.useStoredDash);
+        if (!p) return toast('Org profile not found.');
+        api = await SalesforceApi.fromStoredProfile(p);
+        toast(`Active org: ${p.alias || p.username || p.hostname}`);
+        render();
+      } catch (e) { toast(e.message, 4000); }
+    }
+  );
+}
+
+function renderHealth(org) {
+  return `<p><b>Status:</b> ${escapeHtml(org.status || 'unknown')}</p>
+    <p><b>API:</b> ${org.apiAvailable ? 'Available' : 'Unavailable'}</p>
+    <p><b>Org:</b> ${escapeHtml(org.orgId || '—')}</p>
+    <p class="muted" style="font-size:11px">Click Re-check Health for detailed diagnostics.</p>`;
+}
+
+function renderDetailedHealth(org, h) {
+  if (!h) return '<p class="muted">Health check failed.</p>';
+  const rows = Object.entries(h).map(([k,v]) =>
+    `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(String(v))}</td></tr>`).join('');
+  return `<table class="table"><thead><tr><th>Check</th><th>Result</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function renderOrgCards() {
+  if (!orgs.length) return '<p class="muted">No Salesforce tabs detected.</p>';
+  return `<div class="org-grid">${orgs.map(org => `
+    <article class="org-tile color-${org.colorTag || 'purple'}">
+      <div class="org-tile-head">
+        <div><h4>${escapeHtml(org.alias || org.hostname)}</h4>
+          <p class="muted">${escapeHtml(org.type || '')} • ${escapeHtml(org.username || '')}</p></div>
+        ${orgHealthBadge(org)}
+      </div>
+      <div class="toolbar"><button data-org-key="${escapeHtml(org.key)}">Use Org</button></div>
+    </article>`).join('')}</div>`;
+}
+
+function renderRecent() {
+  const recent = profiles.recent || [];
+  if (!recent.length) return '<p class="muted">No recent org history.</p>';
+  return `<div class="org-grid">${recent.slice(0, 6).map(org => `
+    <article class="org-tile color-${org.colorTag || 'purple'}">
+      <div class="org-tile-head">
+        <div><h4>${escapeHtml(org.alias || org.hostname)}</h4></div>
+      </div>
+      <div class="toolbar"><button data-reconnect-key="${escapeHtml(org.key)}">Reconnect</button></div>
+    </article>`).join('')}</div>`;
+}
+
+function bindRecentOrgButtons() {
+  document.querySelectorAll('[data-reconnect-key]').forEach(btn =>
+    btn.onclick = async () => {
+      const k = btn.dataset.reconnectKey;
+      const match = orgs.find(o => o.key === k);
+      if (match) { await connect(match); } else { await connect(); }
+    }
+  );
+}
+
+function bindOrgCards() {
+  document.querySelectorAll('[data-org-key]').forEach(btn =>
+    btn.onclick = async () => {
+      const k   = btn.dataset.orgKey;
+      const org = orgs.find(o => o.key === k);
+      if (!org) return toast('Org not found.');
+      await connect(org);
+    }
+  );
+}
+
+// ── Inspector — Enhancement #5: SOQL history + column sort ────────────────────
+async function inspector() {
+  const histEntries = await loadSoqlHistory();
+  view().innerHTML = `<div class="grid">
+    <section class="card span6">
+      <h3>SOQL Runner <span class="badge info">History + Sort</span></h3>
+      <div class="field">
+        <label>Recent Queries</label>
+        <select id="soqlHistSelect">${renderSoqlHistoryDropdown(histEntries)}</select>
+      </div>
+      <div class="field">
+        <label>SOQL Query <span class="muted">Ctrl+Enter to run</span></label>
+        <textarea id="soql">SELECT Id, Name FROM Account LIMIT 25</textarea>
+      </div>
+      <div class="field" style="display:flex;gap:8px;align-items:center">
+        <label>Save as</label>
+        <input id="soqlSaveName" placeholder="Query name (optional)" style="flex:1">
+        <button class="secondary" id="saveSoqlBtn">Save</button>
+      </div>
+      <div class="toolbar">
+        <button id="runSoql">Run Query</button>
+        <button class="secondary" id="runSoqlAll">Load All Pages</button>
+        <button class="secondary" id="csvSoql">Download CSV</button>
+        <button class="secondary" id="toggleBuilder">Visual Builder</button>
+      </div>
+      <div id="soqlBuilder" style="display:none;background:var(--panel2);border-radius:8px;padding:12px;margin-top:8px">
+        <div class="field" style="margin-bottom:8px">
+          <label style="font-size:12px">Object</label>
+          <select id="bldObject"><option value="">— pick object —</option></select>
+        </div>
+        <div id="bldFields" style="display:none">
+          <div class="field" style="margin-bottom:8px">
+            <label style="font-size:12px">Fields <span class="muted">(check to SELECT)</span></label>
+            <div id="bldFieldList" style="max-height:140px;overflow-y:auto;background:var(--panel);border-radius:6px;padding:6px"></div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+            <div class="field">
+              <label style="font-size:12px">WHERE field</label>
+              <select id="bldWhereField"><option value="">— none —</option></select>
+            </div>
+            <div class="field">
+              <label style="font-size:12px">Operator</label>
+              <select id="bldWhereOp"><option>=</option><option>!=</option><option>LIKE</option><option>&gt;</option><option>&lt;</option><option>IN</option><option>NOT IN</option></select>
+            </div>
+          </div>
+          <div class="field" style="margin-bottom:8px">
+            <label style="font-size:12px">WHERE value</label>
+            <input id="bldWhereVal" placeholder="'Value' or (val1,val2)">
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+            <div class="field">
+              <label style="font-size:12px">ORDER BY</label>
+              <select id="bldOrderField"><option value="">— none —</option></select>
+            </div>
+            <div class="field">
+              <label style="font-size:12px">Direction</label>
+              <select id="bldOrderDir"><option>ASC</option><option>DESC</option></select>
+            </div>
+          </div>
+          <div class="field" style="margin-bottom:8px">
+            <label style="font-size:12px">LIMIT</label>
+            <input id="bldLimit" type="number" value="50" min="1" max="50000" style="width:80px">
+          </div>
+          <button id="bldApply" style="font-size:12px;padding:5px 12px">Apply to Query</button>
+        </div>
+      </div>
+      <div id="soqlProgress" class="muted" style="font-size:12px"></div>
+      <div id="soqlResult"></div>
+      <div id="recordDetail" style="display:none;margin-top:12px;padding:12px;background:var(--panel2);border-radius:8px;border:1px solid var(--purple)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <b id="recordDetailTitle" style="font-size:13px">Record Detail</b>
+          <button id="closeRecordDetail" style="font-size:11px;padding:3px 8px">Close</button>
+        </div>
+        <div id="recordDetailBody"></div>
+      </div>
+    </section>
+    <section class="card span6">
+      <h3>Object &amp; Field Browser</h3>
+      <div class="toolbar">
+        <button id="loadObjects">Load Objects</button>
+        <input id="objectFilter" placeholder="Filter objects…">
+      </div>
+      <div class="field">
+        <label>Object API Name</label>
+        <input id="objectName" placeholder="Account">
+      </div>
+      <div class="toolbar">
+        <button id="describeObject">Describe Object</button>
+        <input id="fieldFilter" placeholder="Filter fields…" style="display:none">
+      </div>
+      <div id="objectResult"></div>
+    </section>
+  </div>`;
+
+  let lastRecords = [], allFields = [], sortCol = null, sortDir = 1;
+
+  // History dropdown
+  $('#soqlHistSelect').onchange = () => {
+    const idx = $('#soqlHistSelect').value;
+    if (idx === '') return;
+    const entry = histEntries[parseInt(idx)];
+    if (entry) { $('#soql').value = entry.soql; }
+  };
+
+  $('#saveSoqlBtn').onclick = async () => {
+    const soql = $('#soql').value.trim();
+    if (!soql) return toast('Enter a query first.');
+    await pushSoqlHistory(soql, $('#soqlSaveName').value.trim());
+    toast('Query saved to history.');
+  };
+
+  function renderSortableTable(records) {
+    if (!records.length) return '<p class="muted">No rows returned.</p>';
+    const cols = [...new Set(records.flatMap(r => Object.keys(r).filter(k => k !== 'attributes' && !k.startsWith('_'))))].slice(0, 12);
+    const headerHtml = cols.map(c => {
+      const arrow = c === sortCol ? (sortDir === 1 ? ' ▲' : ' ▼') : '';
+      return `<th style="cursor:pointer" data-col="${escapeHtml(c)}">${escapeHtml(c)}${arrow}</th>`;
+    }).join('');
+    const bodyHtml = records.map(r =>
+      `<tr>${cols.map(c => `<td>${escapeHtml(typeof r[c] === 'object' ? JSON.stringify(r[c]) : r[c] ?? '')}</td>`).join('')}</tr>`
+    ).join('');
+    return `<table class="table"><thead><tr>${headerHtml}</tr></thead><tbody>${bodyHtml}</tbody></table>`;
+  }
+
+  function applySort(records) {
+    if (!sortCol) return records;
+    return [...records].sort((a, b) => {
+      const av = a[sortCol] ?? '', bv = b[sortCol] ?? '';
+      return sortDir * (String(av) < String(bv) ? -1 : String(av) > String(bv) ? 1 : 0);
+    });
+  }
+
+  function attachSortHandlers() {
+    document.querySelectorAll('#soqlResult th[data-col]').forEach(th => {
+      th.onclick = () => {
+        if (sortCol === th.dataset.col) { sortDir *= -1; } else { sortCol = th.dataset.col; sortDir = 1; }
+        $('#soqlResult').innerHTML = renderSortableTable(applySort(lastRecords));
+        attachSortHandlers();
+        attachRowHandlers();
+      };
+    });
+  }
+
+  function attachRowHandlers() {
+    document.querySelectorAll('#soqlResult tbody tr').forEach((tr, i) => {
+      tr.style.cursor = 'pointer';
+      tr.onclick = () => {
+        const rec = applySort(lastRecords)[i];
+        if (!rec) return;
+        const allKeys = Object.keys(rec).filter(k => k !== 'attributes');
+        const rows = allKeys.map(k => {
+          const v = rec[k];
+          const display = v === null ? '<span style="color:var(--muted);font-style:italic">null</span>'
+            : typeof v === 'object' ? `<code style="font-size:11px">${escapeHtml(JSON.stringify(v))}</code>`
+            : escapeHtml(String(v));
+          return `<tr><td style="font-weight:500;padding:3px 8px 3px 0;font-size:12px;white-space:nowrap;color:var(--muted)">${escapeHtml(k)}</td>
+            <td style="padding:3px 0;font-size:12px;word-break:break-all">${display}</td></tr>`;
+        }).join('');
+        $('#recordDetailTitle').textContent = rec.Name || rec.Id || 'Record';
+        $('#recordDetailBody').innerHTML = `<table style="width:100%">${rows}</table>`;
+        if (rec.Id && api?.orgUrl) {
+          $('#recordDetailBody').innerHTML += `<a href="${api.orgUrl}/${rec.Id}" target="_blank" style="font-size:12px;color:var(--purple2);margin-top:8px;display:block">Open in Salesforce ↗</a>`;
+        }
+        $('#recordDetail').style.display = '';
+      };
+    });
+  }
+
+  $('#closeRecordDetail').onclick = () => { $('#recordDetail').style.display = 'none'; };
+
+  // ── Visual Query Builder ──────────────────────────────────────────────────
+  let builderVisible = false, builderFields = [];
+
+  $('#toggleBuilder').onclick = async () => {
+    builderVisible = !builderVisible;
+    $('#soqlBuilder').style.display = builderVisible ? '' : 'none';
+    if (builderVisible && !$('#bldObject').options.length > 1) {
+      try {
+        const r = await requireApi().describeGlobal();
+        const opts = r.sobjects.filter(o => o.queryable).sort((a,b)=>a.label.localeCompare(b.label))
+          .map(o => `<option value="${escapeHtml(o.name)}">${escapeHtml(o.label)} (${escapeHtml(o.name)})</option>`).join('');
+        $('#bldObject').innerHTML = '<option value="">— pick object —</option>' + opts;
+      } catch(e) { toast(e.message, 4000); }
+    }
+  };
+
+  $('#bldObject').onchange = async () => {
+    const obj = $('#bldObject').value;
+    if (!obj) { $('#bldFields').style.display = 'none'; return; }
+    try {
+      const r = await requireApi().describeObject(obj);
+      builderFields = r.fields.sort((a,b) => a.label.localeCompare(b.label));
+      const checkboxes = builderFields.map(f =>
+        `<label style="display:block;font-size:12px;padding:2px 0;cursor:pointer">
+          <input type="checkbox" data-bld-field="${escapeHtml(f.name)}" ${['Id','Name'].includes(f.name)?'checked':''} style="margin-right:4px">
+          ${escapeHtml(f.label)} <span style="color:var(--muted);font-size:10px">(${escapeHtml(f.name)})</span>
+        </label>`).join('');
+      $('#bldFieldList').innerHTML = checkboxes;
+      const fieldOpts = '<option value="">— none —</option>' +
+        builderFields.map(f => `<option value="${escapeHtml(f.name)}">${escapeHtml(f.label)}</option>`).join('');
+      $('#bldWhereField').innerHTML = fieldOpts;
+      $('#bldOrderField').innerHTML = fieldOpts;
+      $('#bldFields').style.display = '';
+    } catch(e) { toast(e.message, 4000); }
+  };
+
+  $('#bldApply').onclick = () => {
+    const obj    = $('#bldObject').value;
+    if (!obj) return toast('Select an object first.');
+    const checked = [...document.querySelectorAll('[data-bld-field]:checked')].map(c => c.dataset.bldField);
+    if (!checked.length) return toast('Select at least one field.');
+    let soql = `SELECT ${checked.join(', ')} FROM ${obj}`;
+    const wf = $('#bldWhereField').value, wv = ($('#bldWhereVal').value||'').trim(), wo = $('#bldWhereOp').value;
+    if (wf && wv) soql += ` WHERE ${wf} ${wo} ${wv}`;
+    const of = $('#bldOrderField').value;
+    if (of) soql += ` ORDER BY ${of} ${$('#bldOrderDir').value}`;
+    const lim = parseInt($('#bldLimit').value || '50');
+    soql += ` LIMIT ${lim}`;
+    $('#soql').value = soql;
+    toast('Query built — click Run Query to execute.');
+  };
+
+  $('#runSoql').onclick = async () => {
+    try {
+      const soql = $('#soql').value.trim();
+      $('#soqlProgress').textContent = 'Running…';
+      const r = await requireApi().query(soql);
+      lastRecords = r.records || [];
+      await pushSoqlHistory(soql);
+      const truncNote = r.done ? '' : ` (showing first ${lastRecords.length} of ${r.totalSize} — use Load All Pages)`;
+      $('#soqlProgress').textContent = `${lastRecords.length} record${lastRecords.length === 1 ? '' : 's'}${truncNote}`;
+      $('#soqlResult').innerHTML = renderSortableTable(applySort(lastRecords));
+      attachSortHandlers(); attachRowHandlers();
+    } catch (e) { $('#soqlProgress').textContent = ''; toast(e.message, 5000, { copyText: e.message }); }
+  };
+
+  $('#runSoqlAll').onclick = async () => {
+    try {
+      const soql = $('#soql').value.trim();
+      $('#soqlProgress').textContent = 'Loading page 1…';
+      const r = await requireApi().queryAll(soql, {
+        maxRecords: 10000,
+        onPage: (loaded, total) => { $('#soqlProgress').textContent = `Loaded ${loaded} of ${total}…`; }
+      });
+      lastRecords = r.records;
+      await pushSoqlHistory(soql);
+      const truncNote = r.truncated ? ` (capped at ${lastRecords.length})` : '';
+      $('#soqlProgress').textContent = `${lastRecords.length} record${lastRecords.length === 1 ? '' : 's'}${truncNote}`;
+      $('#soqlResult').innerHTML = renderSortableTable(applySort(lastRecords));
+      attachSortHandlers(); attachRowHandlers();
+    } catch (e) { $('#soqlProgress').textContent = ''; toast(e.message, 4000, { copyText: e.message }); }
+  };
+
+  $('#csvSoql').onclick = () => chrome.runtime.sendMessage({
+    type: 'DOWNLOAD_TEXT', filename: 'sf-forge-query.csv', mime: 'text/csv',
+    content: lastRecords.length ? toCsv(lastRecords) : 'No records to export'
+  });
+
+  $('#loadObjects').onclick = async () => {
+    try {
+      const r = await requireApi().describeGlobal();
+      window._objs = r.sobjects;
+      renderObjectTable(r.sobjects);
+    } catch (e) { toast(e.message, 4000); }
+  };
+
+  function renderObjectTable(sobjects) {
+    const filt     = ($('#objectFilter').value || '').toLowerCase();
+    const filtered = filt ? sobjects.filter(o => o.name.toLowerCase().includes(filt) || o.label.toLowerCase().includes(filt)) : sobjects;
+    $('#objectResult').innerHTML = table(filtered.slice(0, 300).map(o => ({ name: o.name, label: o.label, queryable: o.queryable, custom: o.custom })));
+  }
+
+  $('#objectFilter').oninput = () => { if (window._objs) renderObjectTable(window._objs); };
+
+  $('#describeObject').onclick = async () => {
+    try {
+      const r = await requireApi().describeObject($('#objectName').value || 'Account');
+      allFields = r.fields;
+      $('#fieldFilter').style.display = '';
+      renderFieldTable(allFields);
+    } catch (e) { toast(e.message, 4000); }
+  };
+
+  function renderFieldTable(fields) {
+    const filt     = ($('#fieldFilter').value || '').toLowerCase();
+    const filtered = filt ? fields.filter(f => f.name.toLowerCase().includes(filt) || f.label.toLowerCase().includes(filt)) : fields;
+    $('#objectResult').innerHTML = `<p class="muted" style="font-size:12px">${filtered.length} of ${fields.length} fields</p>` +
+      table(filtered.map(f => ({ label: f.label, name: f.name, type: f.type, nillable: f.nillable, updateable: f.updateable, formula: f.calculatedFormula ? 'Y' : '' })));
+  }
+
+  $('#fieldFilter').oninput = () => { if (allFields.length) renderFieldTable(allFields); };
+}
+
+// ── REST Explorer ─────────────────────────────────────────────────────────────
+async function rest() {
+  view().innerHTML = `<section class="card">
+    <h3>REST Explorer</h3>
+    <div class="toolbar">
+      <select id="method"><option>GET</option><option>POST</option><option>PATCH</option><option>DELETE</option></select>
+      <input id="path" value="/limits" title="Path under /services/data/vXX.X or full URL">
+      <button id="sendRest">Send</button>
+      <button class="secondary" id="saveJson">Download JSON</button>
+    </div>
+    <div class="field"><label>JSON Body (POST/PATCH) <span class="muted">Ctrl+Enter to send</span></label><textarea id="body" placeholder='{ "Name": "Example" }'></textarea></div>
+    <div id="restResult"></div>
+  </section>`;
+
+  let last = null;
+  $('#sendRest').onclick = async () => {
+    try {
+      const opts = { method: $('#method').value };
+      if (opts.method !== 'GET' && $('#body').value.trim()) opts.body = $('#body').value;
+      last = await requireApi().rest($('#path').value, opts);
+      $('#restResult').innerHTML = pre(last);
+    } catch (e) { toast(e.message, 4000, { copyText: e.message }); }
+  };
+  $('#saveJson').onclick = () => last && downloadJson('sf-forge-rest.json', last);
+}
+
+// ── Metadata Studio — Enhancement #12: inline Edit & Save ─────────────────────
+async function metadata() {
+  view().innerHTML = `<div class="grid">
+    <section class="card span6">
+      <h3>Metadata Search</h3>
+      <p class="muted">Apex uses <span class="kbd">Name</span> field; LWC/Aura/Flow use <span class="kbd">DeveloperName</span>.</p>
+      <div class="toolbar">
+        <select id="mdType">
+          <option>ApexClass</option><option>ApexTrigger</option>
+          <option>LightningComponentBundle</option><option>AuraDefinitionBundle</option>
+          <option>FlowDefinitionView</option><option>EntityDefinition</option><option>FieldDefinition</option>
+          <option>PermissionSet</option><option>Profile</option><option>CustomObject</option>
+        </select>
+        <input id="mdSearch" placeholder="Search name…">
+        <button id="searchMd">Search</button>
+      </div>
+      <div id="mdResult"></div>
+    </section>
+    <section class="card span6">
+      <h3>Anonymous Apex</h3>
+      <textarea id="anon">System.debug('Forged by SF Forge');</textarea>
+      <div class="toolbar"><button id="runAnon">Execute</button></div>
+      <div id="anonResult"></div>
+    </section>
+    <section class="card span12" id="editSection" style="display:none">
+      <h3>Edit Source <span class="badge warn" id="editLabel"></span></h3>
+      <textarea id="editBody" style="font-family:monospace;min-height:300px"></textarea>
+      <div class="toolbar">
+        <button id="saveToOrg">Save to Org</button>
+        <button class="secondary" id="cancelEdit">Cancel</button>
+      </div>
+      <div id="editResult"></div>
+    </section>
+  </div>`;
+
+  const metadataQueries = {
+    ApexClass:               q => `SELECT Id, Name, NamespacePrefix, ApiVersion, Status, CreatedDate, LastModifiedDate FROM ApexClass WHERE Name LIKE '%${q}%' ORDER BY LastModifiedDate DESC LIMIT 50`,
+    ApexTrigger:             q => `SELECT Id, Name, NamespacePrefix, TableEnumOrId, ApiVersion, Status, CreatedDate, LastModifiedDate FROM ApexTrigger WHERE Name LIKE '%${q}%' ORDER BY LastModifiedDate DESC LIMIT 50`,
+    LightningComponentBundle:q => `SELECT Id, DeveloperName, NamespacePrefix, MasterLabel, ApiVersion, CreatedDate, LastModifiedDate FROM LightningComponentBundle WHERE DeveloperName LIKE '%${q}%' ORDER BY LastModifiedDate DESC LIMIT 50`,
+    AuraDefinitionBundle:    q => `SELECT Id, DeveloperName, NamespacePrefix, ApiVersion, CreatedDate, LastModifiedDate FROM AuraDefinitionBundle WHERE DeveloperName LIKE '%${q}%' ORDER BY LastModifiedDate DESC LIMIT 50`,
+    FlowDefinitionView:      q => `SELECT Id, ApiName, Label, ActiveVersionId, LatestVersionId FROM FlowDefinitionView WHERE ApiName LIKE '%${q}%' ORDER BY ApiName LIMIT 50`,
+    EntityDefinition:        q => `SELECT QualifiedApiName, Label, DurableId, IsCustomizable, IsCustomSetting FROM EntityDefinition WHERE QualifiedApiName LIKE '%${q}%' ORDER BY QualifiedApiName LIMIT 50`,
+    FieldDefinition:         q => `SELECT QualifiedApiName, EntityDefinition.QualifiedApiName, Label, DataType, DurableId FROM FieldDefinition WHERE QualifiedApiName LIKE '%${q}%' ORDER BY EntityDefinition.QualifiedApiName, QualifiedApiName LIMIT 50`,
+    PermissionSet:           q => `SELECT Id, Name, Label, IsOwnedByProfile, Profile.Name FROM PermissionSet WHERE Name LIKE '%${q}%' OR Label LIKE '%${q}%' ORDER BY Label LIMIT 50`,
+    Profile:                 q => `SELECT Id, Name FROM Profile WHERE Name LIKE '%${q}%' ORDER BY Name LIMIT 50`,
+    CustomObject:            q => `SELECT Id, DeveloperName, NamespacePrefix, ManageableState FROM CustomObject WHERE DeveloperName LIKE '%${q}%' ORDER BY DeveloperName LIMIT 50`
+  };
+
+  const sourceEndpoint = {
+    ApexClass:   id => `/sobjects/ApexClass/${id}`,
+    ApexTrigger: id => `/sobjects/ApexTrigger/${id}`,
+    LightningComponentBundle: id => `/sobjects/LightningComponentBundle/${id}`,
+    AuraDefinitionBundle:     id => `/sobjects/AuraDefinitionBundle/${id}`
+  };
+
+  let lastType = 'ApexClass', lastRecords = [], editingId = null, editingType = null;
+
+  $('#searchMd').onclick = async () => {
+    try {
+      lastType = $('#mdType').value;
+      const q  = safeLike($('#mdSearch').value);
+      const r  = await requireApi().toolingQuery(metadataQueries[lastType](q));
+      lastRecords = r.records || [];
+      const hasSource = !!sourceEndpoint[lastType];
+      const setupPaths = {
+        ApexClass: id => `/lightning/setup/ApexClasses/page?address=%2F${id}`,
+        ApexTrigger: id => `/lightning/setup/ApexTriggers/page?address=%2F${id}`,
+        LightningComponentBundle: id => `/lightning/setup/LightningComponentBundle/page?address=%2F${id}`,
+        FlowDefinitionView: id => { const rec = lastRecords.find(r=>r.Id===id); return `/lightning/setup/Flows/page?address=%2F${rec?.ActiveVersionId||id}`; },
+        PermissionSet: id => `/lightning/setup/PermSets/page?address=%2F${id}`,
+        Profile: id => `/lightning/setup/EnhancedProfiles/page?address=%2F${id}`,
+      };
+      const actionFn = id => {
+        const rec = lastRecords.find(r => r.Id === id) || {};
+        const name = rec.Name || rec.DeveloperName || rec.ApiName || id;
+        let btns = '';
+        if (setupPaths[lastType]) btns += `<button data-open-setup="${escapeHtml(id)}" title="Open in Setup">Setup ↗</button> `;
+        if (hasSource) btns += `<button data-dl-src="${escapeHtml(id)}">Download</button> <button class="secondary" data-edit-src="${escapeHtml(id)}">Edit</button> `;
+        if (lastType === 'ApexClass') btns += `<button class="secondary" data-run-test="${escapeHtml(id)}" data-class-name="${escapeHtml(name)}">Run Tests</button>`;
+        return btns;
+      };
+      $('#mdResult').innerHTML = table(lastRecords, actionFn);
+      document.querySelectorAll('[data-open-setup]').forEach(b => {
+        b.onclick = () => { const path = setupPaths[lastType]?.(b.dataset.openSetup); if (path) openSfPath(path); };
+      });
+      if (hasSource) {
+        document.querySelectorAll('[data-dl-src]').forEach(b => b.onclick = () => downloadSource(b.dataset.dlSrc, lastType));
+        document.querySelectorAll('[data-edit-src]').forEach(b => b.onclick = () => openEditor(b.dataset.editSrc, lastType));
+      }
+      document.querySelectorAll('[data-run-test]').forEach(b => b.onclick = () => runApexTests(b.dataset.className));
+    } catch (e) { toast(e.message, 4000, { copyText: e.message }); }
+  };
+
+  async function downloadSource(id, type) {
+    try {
+      const rec  = await requireApi().tooling(`${sourceEndpoint[type](id)}`);
+      const body = rec.Body || rec.Source || rec.Markup || JSON.stringify(rec, null, 2);
+      const name = rec.Name || rec.DeveloperName || id;
+      const ext  = type === 'ApexClass' ? '.cls' : type === 'ApexTrigger' ? '.trigger' : '.js';
+      chrome.runtime.sendMessage({ type: 'DOWNLOAD_TEXT', filename: `${name}${ext}`, mime: 'text/plain', content: body });
+      toast(`Downloading ${name}${ext}`);
+    } catch (e) { toast(e.message, 4000); }
+  }
+
+  async function runApexTests(className) {
+    const editSec = $('#editSection');
+    editSec.style.display = '';
+    $('#editLabel').textContent = `Test run: ${className}`;
+    $('#editBody').value = `// Running tests for ${className}…\n// Results will appear below.`;
+    $('#editResult').innerHTML = '<p class="muted">Submitting test run…</p>';
+    try {
+      const r = await requireApi().tooling(`/runTestsSynchronous`, {
+        method: 'POST',
+        body: JSON.stringify({ classNames: className, maxFailedTests: 0 })
+      });
+      const tests = r?.tests || [];
+      const pass = tests.filter(t => t.outcome === 'Pass').length;
+      const fail = tests.filter(t => t.outcome === 'Fail').length;
+      const skip = tests.filter(t => t.outcome === 'Skip').length;
+      const cov  = r?.codeCoverage?.find(c => c.name === className);
+      const covPct = cov ? Math.round((cov.numLocations - cov.numLocationsNotCovered) / Math.max(cov.numLocations,1) * 100) : null;
+      const rows = tests.map(t => {
+        const colour = t.outcome === 'Pass' ? 'color:#4ade80' : t.outcome === 'Fail' ? 'color:#f87171' : 'color:var(--muted)';
+        const msg = t.message ? `<br><span style="font-size:11px;color:#f87171">${escapeHtml(t.message)}</span>` : '';
+        return `<tr><td style="font-size:12px">${escapeHtml(t.methodName)}</td>
+          <td style="${colour};font-size:12px;font-weight:500">${t.outcome}</td>
+          <td style="font-size:12px">${t.runTime}ms${msg}</td></tr>`;
+      }).join('');
+      $('#editBody').value = `Tests: ${pass} passed, ${fail} failed, ${skip} skipped${covPct !== null ? ' | Coverage: ' + covPct + '%' : ''}`;
+      $('#editResult').innerHTML = `
+        <div style="display:flex;gap:12px;margin-bottom:8px;font-size:13px">
+          <span style="color:#4ade80">✓ ${pass} passed</span>
+          <span style="color:#f87171">✗ ${fail} failed</span>
+          <span style="color:var(--muted)">${skip} skipped</span>
+          ${covPct !== null ? `<span>Coverage: <b>${covPct}%</b></span>` : ''}
+        </div>
+        <table class="table"><thead><tr><th>Method</th><th>Result</th><th>Time / Error</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan=3 style="color:var(--muted)">No test methods found</td></tr>'}</tbody></table>`;
+    } catch(e) {
+      $('#editResult').innerHTML = `<p class="error-note">${escapeHtml(e.message)}</p>`;
+    }
+  }
+
+  // Enhancement #12: open inline editor
+  async function openEditor(id, type) {
+    try {
+      const rec  = await requireApi().tooling(`${sourceEndpoint[type](id)}`);
+      const body = rec.Body || rec.Source || rec.Markup || '';
+      const name = rec.Name || rec.DeveloperName || id;
+      editingId   = id;
+      editingType = type;
+      $('#editSection').style.display = '';
+      $('#editLabel').textContent = name;
+      $('#editBody').value = body;
+      $('#editSection').scrollIntoView({ behavior: 'smooth' });
+    } catch (e) { toast(e.message, 4000); }
+  }
+
+  $('#saveToOrg').onclick = async () => {
+    if (!editingId) return;
+    const btn = $('#saveToOrg');
+    btn.disabled = true; btn.textContent = 'Saving…';
+    try {
+      const body = $('#editBody').value;
+      const endpoint = sourceEndpoint[editingType](editingId);
+      await requireApi().tooling(endpoint, {
+        method: 'PATCH',
+        body: JSON.stringify({ Body: body })
+      });
+      $('#editResult').innerHTML = '<p class="badge ok" style="margin-top:8px">Saved to org successfully.</p>';
+      toast('Source saved to org.');
+    } catch (e) {
+      $('#editResult').innerHTML = `<p class="error-note">${escapeHtml(e.message)}</p>`;
+      toast(e.message, 5000, { copyText: e.message });
+    } finally {
+      btn.disabled = false; btn.textContent = 'Save to Org';
+    }
+  };
+
+  $('#cancelEdit').onclick = () => {
+    $('#editSection').style.display = 'none';
+    editingId = null; editingType = null;
+  };
+
+  $('#runAnon').onclick = async () => {
+    try {
+      const r = await requireApi().tooling(`/executeAnonymous?anonymousBody=${encodeURIComponent($('#anon').value)}`);
+      $('#anonResult').innerHTML = pre(r);
+    } catch (e) { toast(e.message, 4000); }
+  };
+}
+
+// ── Debug Logs — BUG FIX: split uses NL constant ──────────────────────────────
+async function logs() {
+  view().innerHTML = `<section class="card">
+    <h3>Debug Log Beautifier <span class="badge info">Color coded</span></h3>
+    <p class="muted">Severity coloring for SOQL, DML, Apex debug, Flow, callouts, exceptions, and warnings.</p>
+    <div class="toolbar">
+      <button id="loadLogs">Load Recent Logs</button>
+      <button class="secondary" id="copyExceptionSummary">Copy Exception Summary</button>
+    </div>
+    <div class="toolbar">
+      <input id="logFilter" placeholder="Filter log lines…">
+      <select id="severityFilter">
+        <option value="all">All lines</option>
+        <option value="error">Errors only</option>
+        <option value="warn">Warnings+</option>
+        <option value="debug">Debug+</option>
+        <option value="flow">Flow+</option>
+        <option value="api">SOQL/DML only</option>
+      </select>
+    </div>
+    <div id="logsList"></div>
+    <div id="logBody"></div>
+  </section>`;
+
+  function classifyLogLine(line) {
+    const l = String(line || '').toUpperCase();
+    if (/EXCEPTION|FATAL_ERROR|ERROR|CANNOT_|INVALID_|FAILED|ASSERT/.test(l)) return 'error';
+    if (/WARN|WARNING|LIMIT_USAGE_FOR_NS|SOQL_EXECUTE_EXPLAIN/.test(l))        return 'warn';
+    if (/USER_DEBUG|DEBUG\|/.test(l))                                           return 'debug';
+    if (/FLOW_|INTERVIEW_|VALIDATION_|WORKFLOW|CODE_UNIT_STARTED|CODE_UNIT_FINISHED/.test(l)) return 'flow';
+    if (/SOQL_EXECUTE|DML_BEGIN|DML_END|CALLOUT/.test(l))                       return 'api';
+    if (/SUCCESS|FINISHED|COMMIT/.test(l))                                      return 'good';
+    return 'neutral';
+  }
+
+  function renderPrettyLog(text) {
+    const q   = $('#logFilter').value.toLowerCase();
+    const sev = $('#severityFilter').value;
+    const sevRank = { all:0, api:1, good:1, neutral:1, flow:2, debug:3, warn:4, error:5 };
+    const minRank  = { all:0, api:0, soql:0, debug:3, warn:4, error:5, flow:2 }[sev] || 0;
+    const lines = text.split(NL);
+    const filtered = lines.filter(l => {
+      if (q && !l.toLowerCase().includes(q)) return false;
+      if (sev === 'all') return true;
+      return (sevRank[classifyLogLine(l)] || 0) >= minRank;
+    });
+    return `<div class="log-viewer">${filtered.map(l => {
+      const cls = classifyLogLine(l);
+      return `<div class="log-line log-${cls}">${escapeHtml(l)}</div>`;
+    }).join('')}</div><p class="muted" style="font-size:11px">${filtered.length} of ${lines.length} lines</p>`;
+  }
+
+  $('#loadLogs').onclick = async () => {
+    try {
+      const r = await requireApi().query(
+        'SELECT Id, LogUser.Name, Operation, Request, StartTime, DurationMilliseconds, Status, LogLength FROM ApexLog ORDER BY StartTime DESC LIMIT 50'
+      );
+      const rows = r.records || [];
+      $('#logsList').innerHTML = table(rows.map(l => ({
+        User: l.LogUser?.Name || '',
+        Operation: l.Operation,
+        Age: timeAgo(l.StartTime),
+        Duration: `${l.DurationMilliseconds}ms`,
+        Size: `${Math.round(l.LogLength / 1024)}KB`,
+        Status: l.Status
+      })), id => `<button data-log-id="${escapeHtml(id)}">View</button><button class="secondary" data-dl-log="${escapeHtml(id)}">Download</button>`);
+
+      // Bind buttons — use the actual record array for IDs
+      rows.forEach((logRow, i) => {
+        const viewBtns = document.querySelectorAll(`[data-log-id]`);
+        const dlBtns   = document.querySelectorAll(`[data-dl-log]`);
+        viewBtns.forEach(b => b.onclick = () => openLog(b.dataset.logId, false));
+        dlBtns.forEach(b  => b.onclick  = () => openLog(b.dataset.dlLog, true));
+      });
+    } catch (e) { toast(e.message, 4000); }
+  };
+
+  // BUG FIX: use NL constant so this line doesn't get split by minifiers
+  $('#copyExceptionSummary').onclick = async () => {
+    const text = String(window._currentLogBody || '');
+    if (!text) return toast('Open a log first.');
+    const lines = text.split(NL).filter(l => /EXCEPTION|FATAL_ERROR|ERROR|ASSERT|CANNOT_|INVALID_/i.test(l)).slice(0, 80).join(NL);
+    await navigator.clipboard.writeText(lines || 'No exception/error lines found.');
+    toast('Exception summary copied.');
+  };
+
+  async function openLog(id, download = false) {
+    try {
+      // ApexLog Body is a blob endpoint — NOT a JSON field.
+      // Fetching /sobjects/ApexLog/{id}/Body returns the raw log text.
+      // We must request it via the REST streaming URL with Accept: text/plain.
+      // The session bridge now returns raw text for non-JSON content-types.
+      const orgUrl = requireApi().orgUrl;
+      const bodyUrl = `${orgUrl}/services/data/v66.0/sobjects/ApexLog/${id}/Body`;
+      
+      // Use bridgeFetch directly so we bypass the JSON-parse layer in request()
+      let text;
+      if (requireApi().hasStoredSession) {
+        // Stored-login orgs: fetch directly with Authorization header
+        const resp = await fetch(bodyUrl, {
+          headers: {
+            'Authorization': `Bearer ${requireApi().org.sessionId}`,
+            'Accept': 'text/plain'
+          }
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status} fetching log body`);
+        text = await resp.text();
+      } else {
+        // Tab-session orgs: route through the bridge with text/plain accept
+        const result = await chrome.runtime.sendMessage({
+          type: 'SF_API_REQUEST',
+          tabId: requireApi().tabId,
+          url: bodyUrl,
+          method: 'GET',
+          body: null,
+          headers: { 'Accept': 'text/plain' }
+        });
+        if (!result?.ok) throw new Error(result?.errorLabel || 'Could not fetch log body');
+        text = typeof result.body === 'string' ? result.body : JSON.stringify(result.body, null, 2);
+      }
+
+      window._currentLogBody = text || '';
+      if (download) {
+        chrome.runtime.sendMessage({ type: 'DOWNLOAD_TEXT', filename: `ApexLog-${id}.log`, mime: 'text/plain', content: text });
+        toast('Log downloaded.');
+      } else {
+        $('#logBody').innerHTML = renderPrettyLog(text);
+      }
+    } catch (e) { toast(e.message, 4000); }
+  }
+
+  $('#logFilter').oninput    = () => { if (window._currentLogBody) $('#logBody').innerHTML = renderPrettyLog(window._currentLogBody); };
+  $('#severityFilter').onchange = () => { if (window._currentLogBody) $('#logBody').innerHTML = renderPrettyLog(window._currentLogBody); };
+}
+
+// ── Flow Analyzer ─────────────────────────────────────────────────────────────
+async function flow() {
+  view().innerHTML = `<section class="card">
+    <h3>Flow Analyzer <span class="badge info">All versions</span></h3>
+    <div class="toolbar">
+      <input id="flowFilter" placeholder="Filter by name…">
+      <input id="flowObject" placeholder="Filter by object…">
+      <select id="flowType">
+        <option value="">All types</option>
+        <option>AutoLaunchedFlow</option><option>Flow</option>
+        <option>InvocableProcess</option><option>Workflow</option>
+      </select>
+      <button id="loadFlows">Load Flows</button>
+      <button class="secondary" id="exportFlows">Export CSV</button>
+    </div>
+    <div id="flowProgress" class="muted" style="font-size:12px"></div>
+    <div id="flowResult"></div>
+    <div id="flowDetail"></div>
+  </section>`;
+
+  let allFlows = [];
+
+  async function loadFlowRows() {
+    $('#flowProgress').textContent = 'Loading…';
+    let r;
+    try {
+      // FlowDefinitionView is Tooling API only — use toolingQueryAll
+      r = await requireApi().toolingQueryAll(
+        `SELECT Id, ApiName, Label, ProcessType, Status, ActiveVersionId, LatestVersionId, LastModifiedDate FROM FlowDefinitionView ORDER BY ApiName`,
+        { maxRecords: 2000 }
+      );
+    } catch (e1) {
+      // Fallback: some sandboxes restrict FlowDefinitionView — try FlowVersionView
+      try {
+        // Fallback: query Flow directly — Definition.Label does not exist on Flow object
+        // Only Definition.DeveloperName is available as a relationship field
+        r = await requireApi().toolingQueryAll(
+          `SELECT Id, Definition.DeveloperName, ProcessType, Status, LastModifiedDate FROM Flow WHERE Status IN ('Active','Obsolete') ORDER BY Definition.DeveloperName`,
+          { maxRecords: 2000 }
+        );
+        // Normalise to match FlowDefinitionView field names
+        r.records = (r.records || []).map(f => ({
+          ...f,
+          ApiName: f.Definition?.DeveloperName || f.Id,
+          Label:   f.Definition?.DeveloperName || f.Id,
+          ActiveVersionId: f.Id
+        }));
+      } catch (e2) {
+        throw new Error('Could not load flows. ' + e2.message);
+      }
+    }
+    allFlows = r.records || [];
+    $('#flowProgress').textContent = `${allFlows.length} flows loaded`;
+    applyFilters();
+  }
+
+  function renderFlowRows(records) {
+    return table(records.map(f => ({
+      ApiName: f.ApiName, Label: f.Label, Type: f.ProcessType,
+      Status: f.Status, Modified: timeAgo(f.LastModifiedDate)
+    })), id => `<button data-inspect-flow="${escapeHtml(id)}">Inspect</button>`);
+  }
+
+  async function applyFilters() {
+    const name = ($('#flowFilter').value || '').toLowerCase();
+    const obj  = ($('#flowObject').value  || '').toLowerCase();
+    const type = $('#flowType').value;
+    let filtered = allFlows;
+    if (name) filtered = filtered.filter(f => (f.ApiName || '').toLowerCase().includes(name) || (f.Label || '').toLowerCase().includes(name));
+    if (obj)  filtered = filtered.filter(f => (f.ApiName || '').toLowerCase().includes(obj));
+    if (type) filtered = filtered.filter(f => f.ProcessType === type);
+    $('#flowResult').innerHTML = filtered.length ? renderFlowRows(filtered) : '<p class="muted">No flows match filters.</p>';
+    document.querySelectorAll('[data-inspect-flow]').forEach(b => b.onclick = () => {
+      const flowRec = allFlows.find(f => f.Id === b.dataset.inspectFlow);
+      if (flowRec?.ActiveVersionId) inspectFlow(flowRec.ActiveVersionId, flowRec.Id);
+      else if (flowRec?.Id) inspectFlow(flowRec.Id, flowRec.Id);
+      else toast('No version to inspect.');
+    });
+  }
+
+  async function inspectFlow(activeVersionId, definitionId) {
+    try {
+      const r = await requireApi().toolingQuery(
+        `SELECT Id, ApiName, Description, ProcessType, Status, LastModifiedDate FROM Flow WHERE Id = '${activeVersionId}' LIMIT 1`
+      );
+      const f = r.records?.[0];
+      if (!f) return toast('Flow version not found.');
+
+      // Load all versions for this flow definition
+      let versionsHtml = '';
+      if (definitionId) {
+        try {
+          const vr = await requireApi().toolingQueryAll(
+            `SELECT Id, VersionNumber, Status, LastModifiedDate FROM Flow WHERE DefinitionId = '${definitionId}' ORDER BY VersionNumber DESC`,
+            { maxRecords: 50 }
+          );
+          const verRows = (vr.records||[]).map(v => {
+            const isActive = v.Id === activeVersionId;
+            const activateBtn = v.Status !== 'Active'
+              ? `<button data-activate-ver="${escapeHtml(v.Id)}" style="font-size:11px;padding:2px 8px">Activate</button>`
+              : '<span style="color:#4ade80;font-size:11px">● Active</span>';
+            return `<tr style="${isActive?'background:rgba(139,92,246,.12)':''}">
+              <td style="font-size:12px">v${v.VersionNumber}</td>
+              <td style="font-size:12px">${v.Status}</td>
+              <td style="font-size:12px">${timeAgo(v.LastModifiedDate)}</td>
+              <td>${activateBtn}</td>
+            </tr>`;
+          }).join('');
+          versionsHtml = `<h4 style="margin:12px 0 6px;font-size:13px">Version History</h4>
+            <table class="table"><thead><tr><th>Version</th><th>Status</th><th>Modified</th><th>Action</th></tr></thead>
+            <tbody>${verRows}</tbody></table>`;
+        } catch(_) {}
+      }
+
+      $('#flowDetail').innerHTML = `<div style="margin-top:16px">
+        <h3 style="font-size:14px;margin-bottom:8px">Flow: ${escapeHtml(f.ApiName || activeVersionId)}</h3>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
+          Type: ${escapeHtml(f.ProcessType||'')} · Status: ${escapeHtml(f.Status||'')} · Modified: ${timeAgo(f.LastModifiedDate)}
+          ${f.Description ? '<br>' + escapeHtml(f.Description) : ''}
+        </div>
+        ${versionsHtml}
+      </div>`;
+
+      document.querySelectorAll('[data-activate-ver]').forEach(btn => {
+        btn.onclick = async () => {
+          if (!confirm('Activate this flow version? The currently active version will be deactivated.')) return;
+          try {
+            await requireApi().tooling(`/sobjects/Flow/${btn.dataset.activateVer}`, {
+              method: 'PATCH', body: JSON.stringify({ Status: 'Active' })
+            });
+            toast('Flow version activated.');
+            await loadFlowRows();
+            inspectFlow(btn.dataset.activateVer, definitionId);
+          } catch(e) { toast(e.message, 5000); }
+        };
+      });
+    } catch (e) { toast(e.message, 4000); }
+  }
+
+  $('#loadFlows').onclick = async () => { try { await loadFlowRows(); } catch (e) { toast(e.message, 4000); } };
+  $('#exportFlows').onclick = () => {
+    if (!allFlows.length) return toast('Load flows first.');
+    chrome.runtime.sendMessage({ type: 'DOWNLOAD_TEXT', filename: 'sf-forge-flows.csv', mime: 'text/csv', content: toCsv(allFlows) });
+  };
+  ['flowFilter','flowObject','flowType'].forEach(id => {
+    const el = $(`#${id}`);
+    if (el) { el.oninput = applyFilters; el.onchange = applyFilters; }
+  });
+}
+
+// ── LWC Lens ──────────────────────────────────────────────────────────────────
+async function lens() {
+  const store = await chrome.storage.local.get('sfForge');
+  const enabled = store.sfForge?.lensEnabled || false;
+  view().innerHTML = `<section class="card">
+    <h3>LWC Lens <span class="badge ${enabled ? 'ok' : 'warn'}">${enabled ? 'Active' : 'Inactive'}</span></h3>
+    <p class="muted">Hover over Lightning components in the active Salesforce tab to see their API names, DOM paths, and component hierarchy.</p>
+    <div class="toolbar">
+      <button id="toggleLens">${enabled ? 'Disable LWC Lens' : 'Enable LWC Lens'}</button>
+    </div>
+    <ul class="muted" style="font-size:13px;margin-top:12px;padding-left:18px">
+      <li>Hover a component — outline + floating info panel appears</li>
+      <li>Right-click → copies component tag to clipboard</li>
+      <li>Click the ⏸ (lock) button in the panel to freeze selection</li>
+      <li>Requires the active tab to be a Salesforce Lightning page</li>
+    </ul>
+    <h4 style="margin:16px 0 8px">Component Source Peek</h4>
+    <p class="muted">Look up any LWC bundle by developer name and preview its source.</p>
+    <div class="toolbar">
+      <input id="lensComponentName" placeholder="DeveloperName, e.g. myComponent">
+      <button id="peekComponent">Peek Source</button>
+    </div>
+    <div id="peekResult"></div>
+  </section>`;
+
+  $('#peekComponent').onclick = async () => {
+    const name = $('#lensComponentName').value.trim();
+    if (!name) return toast('Enter a component DeveloperName.');
+    const res = $('#peekResult');
+    res.innerHTML = '<p class="muted">Fetching…</p>';
+    try {
+      const r = await requireApi().toolingQuery(
+        `SELECT Id, DeveloperName, MasterLabel, ApiVersion FROM LightningComponentBundle WHERE DeveloperName = '${safeLike(name)}' LIMIT 1`
+      );
+      const bundle = r.records?.[0];
+      if (!bundle) { res.innerHTML = `<p class="error-note">No LWC bundle found with DeveloperName "${escapeHtml(name)}".</p>`; return; }
+      // Fetch bundle source files
+      const files = await requireApi().toolingQuery(
+        `SELECT Id, FilePath, Source, Format FROM LightningComponentResource WHERE LightningComponentBundleId = '${bundle.Id}' ORDER BY FilePath`
+      );
+      if (!files.records?.length) { res.innerHTML = '<p class="muted">Bundle found but no source files returned.</p>'; return; }
+      const tabs = files.records.map((f,i) => {
+        const fname = f.FilePath?.split('/').pop() || f.Id;
+        const ext = fname.split('.').pop();
+        return `<button class="secondary" data-peek-tab="${i}" style="font-size:11px;padding:3px 10px;margin-right:4px">${escapeHtml(fname)}</button>`;
+      }).join('');
+      const bodies = files.records.map((f,i) =>
+        `<pre id="peekSrc${i}" style="display:${i===0?'block':'none'};font-size:11px;overflow:auto;max-height:320px;background:var(--panel2);padding:10px;border-radius:6px">${escapeHtml(f.Source||'')}</pre>`
+      ).join('');
+      res.innerHTML = `<p style="font-size:12px;color:var(--muted);margin-bottom:6px">
+        <b>${escapeHtml(bundle.MasterLabel)}</b> · API v${bundle.ApiVersion} · ${files.records.length} file${files.records.length!==1?'s':''}
+      </p>${tabs}${bodies}`;
+      res.querySelectorAll('[data-peek-tab]').forEach(btn => {
+        btn.onclick = () => {
+          files.records.forEach((_,j) => { const el = document.getElementById(`peekSrc${j}`); if(el) el.style.display = 'none'; });
+          const el = document.getElementById(`peekSrc${btn.dataset.peekTab}`);
+          if (el) el.style.display = 'block';
+        };
+      });
+    } catch(e) { res.innerHTML = `<p class="error-note">${escapeHtml(e.message)}</p>`; }
+  };
+
+  $('#toggleLens').onclick = async () => {
+    const tabOrg = orgs.find(o => o.active) || orgs[0];
+    if (!tabOrg?.tabId) return toast('Open a Salesforce Lightning tab first, then Detect Orgs.');
+    const tabId = tabOrg.tabId;
+    const next  = !enabled;
+    await chrome.storage.local.set({ sfForge: { ...(store.sfForge || {}), lensEnabled: next } });
+    try {
+      try { await chrome.tabs.sendMessage(tabId, { type: 'SF_FORGE_LENS_PING' }); }
+      catch (_) {
+        await chrome.scripting.insertCSS({ target: { tabId }, files: ['src/content/lwc-lens.css'] }).catch(() => {});
+        await chrome.scripting.executeScript({ target: { tabId }, files: ['src/content/lwc-lens.js'] });
+      }
+      await chrome.tabs.sendMessage(tabId, { type: 'SF_FORGE_LENS_TOGGLE', enabled: next });
+      toast(`LWC Lens ${next ? 'enabled' : 'disabled'}`);
+      active = 'lens'; render();
+    } catch (e) { toast(`Lens error: ${e.message}`, 4000); }
+  };
+}
+
+// ── Bulk Field Creator ─────────────────────────────────────────────────────────
+async function bulk() {
+  const fieldTypes = ['Text','Number','Currency','Percent','Date','DateTime','Checkbox','Picklist','TextArea','LongTextArea','Email','Phone','Url','Formula','Lookup'];
+  const formulaReturnTypes = ['Text','Number','Currency','Percent','Date','DateTime','Checkbox'];
+
+  view().innerHTML = `<section class="card">
+    <h3>Bulk Field Creator <span class="badge info">CSV · Paste · Grid</span></h3>
+    <p class="muted">Create custom fields in bulk via the Tooling API. Supports CSV upload, paste, and manual grid entry.</p>
+    <div class="toolbar">
+      <button id="loadObjsBulk">Load Objects</button>
+      <div id="objectSelectWrap"></div>
+      <button class="secondary" id="addRow">Add Row</button>
+      <button class="secondary" id="downloadTemplate">CSV Template</button>
+    </div>
+    <div class="field"><label>Paste CSV</label><textarea id="csvPaste" placeholder="Label,API Name,Type,Required,Description"></textarea></div>
+    <div class="toolbar">
+      <button id="parseCsv">Parse CSV</button>
+      <button class="secondary" id="validateOnly">Validate Only</button>
+      <button id="createFields">Create Fields</button>
+    </div>
+    <div id="bulkGrid"></div>
+    <div id="bulkProgress"></div>
+  </section>`;
+
+  let selectedObj = '';
+
+  async function loadObjectsForBulk() {
+    const wrap = $('#objectSelectWrap');
+    wrap.innerHTML = '<span class="muted" style="font-size:12px">Loading objects…</span>';
+    try {
+      const r = await requireApi().describeGlobal();
+      const sobjs = r.sobjects.filter(o => o.customizable).sort((a,b) => a.label.localeCompare(b.label));
+      const opts  = sobjs.map(o => `<option value="${escapeHtml(o.name)}">${escapeHtml(o.label)} (${escapeHtml(o.name)})</option>`).join('');
+      wrap.innerHTML = `<select id="bulkObject" style="min-width:200px"><option value="">— Select object —</option>${opts}</select>`;
+      const sel = $('#bulkObject');
+      // Set to previously selected value if still valid
+      if (selectedObj && sobjs.some(o => o.name === selectedObj)) sel.value = selectedObj;
+      sel.onchange = () => {
+        selectedObj = sel.value;
+        // Update all Object cells in the grid to the newly selected object
+        document.querySelectorAll('[data-cell="Object"]').forEach(el => { if (!el.value) el.value = selectedObj; });
+      };
+      toast(`${sobjs.length} objects loaded`);
+    } catch (e) {
+      wrap.innerHTML = '<span class="error-note" style="font-size:12px">Could not load objects — is an org connected?</span>';
+      toast(e.message, 4000);
+    }
+  }
+
+  function objectSelect(value='') { return `<input data-cell="Object" value="${escapeHtml(value || selectedObj)}" placeholder="Object API Name">`; }
+  function typeSelect(v='Text') { return `<select data-cell="Type">${fieldTypes.map(t=>`<option ${v===t?'selected':''}>${t}</option>`).join('')}</select>`; }
+  function boolSelect(col, v='false') { const b=/^(true|yes|y|1)$/i.test(String(v||'').trim()); return `<select data-cell="${escapeHtml(col)}"><option value="false" ${!b?'selected':''}>No</option><option value="true" ${b?'selected':''}>Yes</option></select>`; }
+
+  function renderGrid() {
+    const rows = window._bulkRows || [];
+    if (!rows.length) { $('#bulkGrid').innerHTML = '<p class="muted">Add a row or parse CSV above.</p>'; return; }
+    const cols = ['Object','Label','API Name','Type','Required','Related Object','Relationship Name','Picklist Values','Description'];
+    const head = ['Object','Label','API Name','Type','Req','Related To','Rel. Name','Picklist Vals','Desc',''].map(c=>`<th style="font-size:11px">${c}</th>`).join('');
+    const body = rows.map((r,i)=>{
+      const type = r['Type'] || 'Text';
+      const isLookup = /lookup|masterdetail/i.test(type);
+      const isPick   = /picklist/i.test(type);
+      return `<tr data-row="${i}">
+        <td>${objectSelect(r['Object'])}</td>
+        <td><input data-cell="Label" value="${escapeHtml(r['Label']||'')}" style="width:90px"></td>
+        <td><input data-cell="API Name" value="${escapeHtml(r['API Name']||'')}" style="width:90px"></td>
+        <td>${typeSelect(r['Type'])}</td>
+        <td>${boolSelect('Required', r['Required'])}</td>
+        <td><input data-cell="Related Object" value="${escapeHtml(r['Related Object']||'')}" placeholder="${isLookup?'Account':''}" style="width:80px;${isLookup?'':'opacity:.4'}" ${isLookup?'':'disabled'}></td>
+        <td><input data-cell="Relationship Name" value="${escapeHtml(r['Relationship Name']||'')}" placeholder="${isLookup?'MyRelationship':''}" style="width:90px;${isLookup?'':'opacity:.4'}" ${isLookup?'':'disabled'}></td>
+        <td><input data-cell="Picklist Values" value="${escapeHtml(r['Picklist Values']||'')}" placeholder="${isPick?'Val1,Val2,Val3':'—'}" style="width:90px;${isPick?'':'opacity:.4'}" ${isPick?'':'disabled'}></td>
+        <td><input data-cell="Description" value="${escapeHtml(r['Description']||'')}" style="width:80px"></td>
+        <td><button data-del-row="${i}">✕</button></td>
+      </tr>`;
+    }).join('');
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'overflow-x:auto;width:100%';
+    const tbl = document.createElement('table');
+    tbl.className = 'table';
+    tbl.style.tableLayout = 'auto';
+    tbl.innerHTML = `<thead><tr>${head}</tr></thead><tbody>${body}</tbody>`;
+    wrap.appendChild(tbl);
+    $('#bulkGrid').innerHTML = '';
+    $('#bulkGrid').appendChild(wrap);
+    document.querySelectorAll('[data-del-row]').forEach(b => b.onclick = () => { window._bulkRows.splice(parseInt(b.dataset.delRow),1); renderGrid(); });
+    // Re-enable/disable related object and picklist fields based on type selection
+    document.querySelectorAll('[data-cell="Type"]').forEach(sel => {
+      sel.onchange = () => {
+        const tr = sel.closest('tr');
+        const isLookup = /lookup|masterdetail/i.test(sel.value);
+        const isPick   = /picklist/i.test(sel.value);
+        tr.querySelectorAll('[data-cell="Related Object"],[data-cell="Relationship Name"]').forEach(el => {
+          el.disabled = !isLookup; el.style.opacity = isLookup ? '1' : '.4';
+          if (!isLookup) el.value = '';
+        });
+        tr.querySelectorAll('[data-cell="Picklist Values"]').forEach(el => {
+          el.disabled = !isPick; el.style.opacity = isPick ? '1' : '.4';
+          if (!isPick) el.value = '';
+        });
+      };
+    });
+  }
+
+  function collectGrid() {
+    const rows = [];
+    document.querySelectorAll('#bulkGrid tbody tr[data-row]').forEach(tr => {
+      const r = {};
+      tr.querySelectorAll('[data-cell]').forEach(el => { r[el.dataset.cell] = el.value; });
+      rows.push(r);
+    });
+    return rows;
+  }
+
+  function csvParse(text) {
+    const lines = text.trim().split(NL).filter(Boolean);
+    if (lines.length < 2) return [];
+    const headers = lines[0].split(',').map(h=>h.trim());
+    return lines.slice(1).map(l => {
+      const vals = l.split(',').map(v=>v.trim().replace(/^"|"$/g,''));
+      const r = {};
+      headers.forEach((h,i)=> { r[h] = vals[i]||''; });
+      return r;
+    });
+  }
+
+  function normalizeType(t='Text') {
+    const map = { text:'Text',number:'Number',currency:'Currency',percent:'Percent',date:'Date',datetime:'DateTime',checkbox:'Checkbox',picklist:'Picklist',textarea:'TextArea',longtextarea:'LongTextArea',email:'Email',phone:'Phone',url:'Url',formula:'Formula',lookup:'Lookup' };
+    return map[(t||'').toLowerCase().replace(/\s/g,'')] || 'Text';
+  }
+
+  function apiName(name) { return String(name||'').trim().replace(/\s+/g,'_').replace(/[^a-zA-Z0-9_]/g,'') + (name.endsWith('__c') ? '' : '__c'); }
+  function bool(v) { return /^(true|yes|y|1)$/i.test(String(v||'').trim()); }
+
+  function buildCustomFieldPayload(r) {
+    const type   = normalizeType(r['Type']);
+    const label  = String(r['Label']||'').trim();
+    const aname  = apiName(r['API Name'] || label);
+    const payload = { fullName: `${r['Object']||selectedObj}.${aname}`, label, type, required: bool(r['Required']) };
+    if (r['Description']) payload.description = r['Description'];
+    if (type === 'Text')          payload.length = 255;
+    if (type === 'LongTextArea')  { payload.length = 32768; payload.visibleLines = 5; }
+    if (type === 'TextArea')      payload.visibleLines = 3;
+    if (type === 'Number' || type === 'Currency' || type === 'Percent') { payload.precision = 18; payload.scale = 2; }
+    if (type === 'Lookup' || type === 'MasterDetail') {
+      const relObj = (r['Related Object']||'').trim();
+      const relName = (r['Relationship Name']||'').trim() || aname.replace(/__c$/,'');
+      if (!relObj) throw new Error(`Field "${label}": Related Object is required for Lookup/MasterDetail fields.`);
+      payload.referenceTo = relObj;
+      payload.relationshipName = relName;
+    }
+    if (type === 'Picklist' && r['Picklist Values']) {
+      const vals = r['Picklist Values'].split(',').map(v=>v.trim()).filter(Boolean);
+      payload.valueSet = { restricted: false, valueSetDefinition: { sorted: false, value: vals.map((v,i) => ({ fullName: v, label: v, default: i===0 })) } };
+    }
+    return payload;
+  }
+
+  window._bulkRows = window._bulkRows || [];
+
+  $('#loadObjsBulk').onclick = loadObjectsForBulk;
+  // Auto-load objects from the connected org immediately
+  if (api) loadObjectsForBulk();
+  $('#addRow').onclick = () => { window._bulkRows.push({'Object':selectedObj,'Label':'','API Name':'','Type':'Text','Required':'false','Description':''}); renderGrid(); };
+  $('#downloadTemplate').onclick = () => chrome.runtime.sendMessage({ type:'DOWNLOAD_TEXT', filename:'sf-forge-bulk-template.csv', mime:'text/csv', content:'Object,Label,API Name,Type,Required,Description\nAccount,My Field,My_Field__c,Text,false,A custom field' });
+  $('#parseCsv').onclick = () => { const rows = csvParse($('#csvPaste').value); if (!rows.length) return toast('No rows found in CSV.'); window._bulkRows = rows; renderGrid(); toast(`${rows.length} rows parsed.`); };
+
+  async function runCreate(validateMode) {
+    const rows = collectGrid();
+    if (!rows.length) return toast('Add rows to the grid first.');
+    const prog = $('#bulkProgress');
+    prog.innerHTML = '';
+    let ok=0, fail=0;
+    for (const r of rows) {
+      const label = r['Label'] || '(unnamed)';
+      const li = document.createElement('div');
+      li.className = 'muted';
+      li.textContent = validateMode ? `Validating: ${label}…` : `Creating: ${label}…`;
+      prog.appendChild(li);
+      if (validateMode) {
+        try { buildCustomFieldPayload(r); li.textContent = `✓ ${label} — payload valid`; li.className='badge ok'; ok++; }
+        catch (e) { li.textContent = `✗ ${label} — ${e.message}`; li.className='badge danger'; fail++; }
+        continue;
+      }
+      try {
+        const payload = buildCustomFieldPayload(r);
+        await requireApi().tooling('/sobjects/CustomField', { method:'POST', body: JSON.stringify(payload) });
+        li.textContent = `✓ ${label} created`; li.className='badge ok'; ok++;
+      } catch (e) { li.textContent = `✗ ${label} — ${e.message}`; li.className='badge danger'; fail++; }
+    }
+    toast(validateMode ? `Validation: ${ok} valid, ${fail} errors` : `Created ${ok} field${ok===1?'':'s'}, ${fail} error${fail===1?'':'s'}`);
+  }
+
+  $('#validateOnly').onclick = () => runCreate(true);
+  $('#createFields').onclick = () => runCreate(false);
+  renderGrid();
+}
+
+// ── Permission Inspector — Enhancement #15: FLS grid ─────────────────────────
+async function permissions() {
+  view().innerHTML = `<section class="card">
+    <h3>Permission Inspector <span class="badge info">Object + FLS</span></h3>
+    <p class="muted">Compare object, field-level security (FLS), Apex class, and flow access for Profiles and Permission Sets.</p>
+    <div class="toolbar">
+      <input id="permNames" placeholder="Permission Set/Profile names comma-separated, e.g. System Administrator">
+      <input id="permObject" placeholder="Object API name, e.g. Account">
+      <button id="runPermCompare">Compare Object Access</button>
+      <button class="secondary" id="runFlsCompare">Compare FLS</button>
+      <button class="secondary" id="exportPermCompare">Export CSV</button>
+    </div>
+    <div id="permResult"></div>
+    <div id="flsResult"></div>
+  </section>`;
+
+  let lastObj = [], lastFls = [];
+
+  $('#runPermCompare').onclick = async () => {
+    try {
+      const names      = $('#permNames').value.split(',').map(x=>x.trim()).filter(Boolean);
+      const objectName = $('#permObject').value.trim();
+      if (!names.length || !objectName) throw new Error('Enter at least one Profile/Permission Set name and an Object API name.');
+      const quoted = names.map(n=>`'${safeLike(n)}'`).join(',');
+      const ps     = await requireApi().toolingQueryAll(`SELECT Id, Name, Label, IsOwnedByProfile, Profile.Name FROM PermissionSet WHERE Name IN (${quoted}) OR Label IN (${quoted}) OR Profile.Name IN (${quoted})`, { maxRecords: 200 });
+      const rows   = [];
+      for (const pset of ps.records || []) {
+        const op = await requireApi().toolingQuery(`SELECT PermissionsRead,PermissionsCreate,PermissionsEdit,PermissionsDelete,PermissionsViewAllRecords,PermissionsModifyAllRecords FROM ObjectPermissions WHERE ParentId='${pset.Id}' AND SobjectType='${safeLike(objectName)}' LIMIT 1`);
+        rows.push({
+          Name: pset.Label || pset.Name || pset.Profile?.Name,
+          Type: pset.IsOwnedByProfile ? 'Profile' : 'Permission Set',
+          Object: objectName,
+          Read:       !!op.records?.[0]?.PermissionsRead,
+          Create:     !!op.records?.[0]?.PermissionsCreate,
+          Edit:       !!op.records?.[0]?.PermissionsEdit,
+          Delete:     !!op.records?.[0]?.PermissionsDelete,
+          ViewAll:    !!op.records?.[0]?.PermissionsViewAllRecords,
+          ModifyAll:  !!op.records?.[0]?.PermissionsModifyAllRecords
+        });
+      }
+      lastObj = rows;
+      $('#permResult').innerHTML = `<h4 style="margin:12px 0 4px">Object-level permissions</h4>${table(rows)}`;
+    } catch (e) { toast(e.message, 5000, { copyText: e.message }); }
+  };
+
+  // Enhancement #15: Field-level security grid
+  $('#runFlsCompare').onclick = async () => {
+    try {
+      const names      = $('#permNames').value.split(',').map(x=>x.trim()).filter(Boolean);
+      const objectName = $('#permObject').value.trim();
+      if (!names.length || !objectName) throw new Error('Enter Profile/Permission Set names and an object name.');
+      const quoted = names.map(n=>`'${safeLike(n)}'`).join(',');
+      const ps     = await requireApi().toolingQueryAll(`SELECT Id, Name, Label, IsOwnedByProfile FROM PermissionSet WHERE Name IN (${quoted}) OR Label IN (${quoted})`, { maxRecords: 200 });
+      const psIds  = (ps.records||[]).map(p=>p.Id);
+      if (!psIds.length) return toast('No matching permission sets found.');
+      const psNames = Object.fromEntries(ps.records.map(p=>[p.Id, p.Label||p.Name]));
+      const flsData = await requireApi().toolingQueryAll(
+        `SELECT ParentId, Field, PermissionsRead, PermissionsEdit FROM FieldPermissions WHERE ParentId IN (${psIds.map(i=>`'${i}'`).join(',')}) AND SobjectType='${safeLike(objectName)}' ORDER BY Field`,
+        { maxRecords: 5000 }
+      );
+      // Build field matrix
+      const fieldMap = {};
+      for (const rec of flsData.records || []) {
+        if (!fieldMap[rec.Field]) fieldMap[rec.Field] = {};
+        fieldMap[rec.Field][rec.ParentId] = { read: rec.PermissionsRead, edit: rec.PermissionsEdit };
+      }
+      const fields  = Object.keys(fieldMap).sort();
+      const psArray = ps.records || [];
+      const rows = fields.map(field => {
+        const row = { Field: field };
+        psArray.forEach(p => {
+          const d = fieldMap[field][p.Id] || { read: false, edit: false };
+          row[`${psNames[p.Id]} R`] = d.read ? '✓' : '—';
+          row[`${psNames[p.Id]} E`] = d.edit ? '✓' : '—';
+        });
+        return row;
+      });
+      lastFls = rows;
+      $('#flsResult').innerHTML = `<h4 style="margin:12px 0 4px">Field-level security: ${escapeHtml(objectName)} (${fields.length} fields)</h4>${table(rows)}`;
+    } catch (e) { toast(e.message, 5000, { copyText: e.message }); }
+  };
+
+  $('#exportPermCompare').onclick = () => {
+    const data = [...lastObj, ...lastFls];
+    if (!data.length) return toast('Run a comparison first.');
+    chrome.runtime.sendMessage({ type:'DOWNLOAD_TEXT', filename:'sf-forge-permission-compare.csv', mime:'text/csv', content:toCsv(data) });
+  };
+}
+
+// ── Org Diff — Enhancement #13: field-level compare ──────────────────────────
+async function orgdiff() {
+  const stored = await readCredentialProfiles();
+  view().innerHTML = `<section class="card">
+    <h3>Org Diff Tool <span class="badge info">Field-level compare</span></h3>
+    <p class="muted">Compare selected metadata — including field presence on custom objects — between the active org and another stored profile.</p>
+    <div class="toolbar">
+      <select id="diffTarget">${(stored.orgs||[]).map(o=>`<option value="${escapeHtml(o.key)}">${escapeHtml(o.alias || o.orgName || o.username || o.hostname)}</option>`).join('')}</select>
+      <select id="diffType"><option>ApexClass</option><option>CustomObject</option><option>FlowDefinitionView</option><option>PermissionSet</option></select>
+      <button id="runOrgDiff">Run Diff</button>
+      <button class="secondary" id="runFieldDiff">Field-level Diff</button>
+      <button class="secondary" id="exportOrgDiff">Export CSV</button>
+    </div>
+    <div id="diffObjectName" style="display:none;margin-top:8px">
+      <input id="diffObjectInput" placeholder="Object API name for field diff, e.g. Account__c">
+    </div>
+    <div id="diffResult"></div>
+  </section>`;
+
+  let lastDiff = [];
+
+  const queries = {
+    ApexClass:        'SELECT Name, LastModifiedDate FROM ApexClass ORDER BY Name',
+    CustomObject:     'SELECT DeveloperName, ManageableState FROM CustomObject ORDER BY DeveloperName',
+    // FlowDefinitionView is Tooling API only — orgdiff uses toolingQueryAll so this is fine
+    FlowDefinitionView:'SELECT Id, ApiName, Label, ActiveVersionId FROM FlowDefinitionView ORDER BY ApiName',
+    PermissionSet:    'SELECT Name, Label, IsOwnedByProfile FROM PermissionSet ORDER BY Name'
+  };
+
+  function keyOf(type, r) { return r.Name || r.DeveloperName || r.ApiName || r.Label || r.Id; }
+
+  $('#diffType').onchange = () => {
+    $('#diffObjectName').style.display = $('#diffType').value === 'CustomObject' ? '' : 'none';
+  };
+
+  $('#runOrgDiff').onclick = async () => {
+    try {
+      const base   = requireApi();
+      const target = await SalesforceApi.fromStoredProfile($('#diffTarget').value);
+      const type   = $('#diffType').value;
+      const left   = await base.toolingQueryAll(queries[type],   { maxRecords: 5000 });
+      const right  = await target.toolingQueryAll(queries[type], { maxRecords: 5000 });
+      const a = new Map((left.records||[]).map(r=>[keyOf(type,r),r]));
+      const b = new Map((right.records||[]).map(r=>[keyOf(type,r),r]));
+      const keys = [...new Set([...a.keys(), ...b.keys()])].sort();
+      lastDiff = keys.map(k => {
+        const lr = a.get(k), rr = b.get(k);
+        let dateNote = '';
+        if (lr?.LastModifiedDate && rr?.LastModifiedDate) {
+          const ld = new Date(lr.LastModifiedDate), rd = new Date(rr.LastModifiedDate);
+          if (ld > rd) dateNote = 'Active newer';
+          else if (rd > ld) dateNote = 'Target newer';
+          else dateNote = 'Same date';
+        }
+        return { Metadata: k, ActiveOrg: a.has(k)?'Yes':'No', TargetOrg: b.has(k)?'Yes':'No', Status: a.has(k)&&b.has(k)?'Both':a.has(k)?'Only Active':'Only Target', DateCompare: dateNote };
+      });
+      $('#diffResult').innerHTML = `<p class="muted">${lastDiff.length} ${escapeHtml(type)} records compared.</p>${table(lastDiff)}`;
+    } catch(e) { toast(e.message, 5000, { copyText: e.message }); }
+  };
+
+  // Enhancement #13: field-level diff for CustomObject
+  $('#runFieldDiff').onclick = async () => {
+    try {
+      const objectName = ($('#diffObjectInput').value || '').trim();
+      if (!objectName) return toast('Enter an object API name for field diff.');
+      const base   = requireApi();
+      const target = await SalesforceApi.fromStoredProfile($('#diffTarget').value);
+      const [la, ra] = await Promise.all([
+        base.describeObject(objectName),
+        target.describeObject(objectName)
+      ]);
+      const leftFields  = new Map((la.fields||[]).map(f=>[f.name, f]));
+      const rightFields = new Map((ra.fields||[]).map(f=>[f.name, f]));
+      const allNames    = [...new Set([...leftFields.keys(), ...rightFields.keys()])].sort();
+      const rows = allNames.map(name => {
+        const lf = leftFields.get(name), rf = rightFields.get(name);
+        let change = '';
+        if (!lf) change = 'Added in target';
+        else if (!rf) change = 'Missing in target';
+        else if (lf.type !== rf.type) change = `Type: ${lf.type} → ${rf.type}`;
+        else if (lf.length !== rf.length) change = `Length: ${lf.length} → ${rf.length}`;
+        else change = 'Match';
+        return { Field: name, Type: lf?.type || rf?.type, InActive: lf?'✓':'—', InTarget: rf?'✓':'—', Change: change };
+      });
+      lastDiff = rows;
+      const changes = rows.filter(r=>r.Change!=='Match').length;
+      $('#diffResult').innerHTML = `<p class="muted">${rows.length} fields compared, ${changes} difference${changes===1?'':'s'}.</p>${table(rows)}`;
+    } catch(e) { toast(e.message, 5000, { copyText: e.message }); }
+  };
+
+  $('#exportOrgDiff').onclick = () => {
+    if (!lastDiff.length) return toast('Run a diff first.');
+    chrome.runtime.sendMessage({ type:'DOWNLOAD_TEXT', filename:'sf-forge-org-diff.csv', mime:'text/csv', content:toCsv(lastDiff) });
+  };
+}
+
+// ── Deployment Assistant ──────────────────────────────────────────────────────
+async function deploy() {
+  view().innerHTML = `<section class="card">
+    <h3>Deployment Assistant <span class="badge info">Preview First</span></h3>
+    <p class="muted">Build package.xml and destructiveChanges.xml from selected metadata. This does not deploy automatically — generates files for review.</p>
+    <div class="toolbar">
+      <select id="deployType"><option>ApexClass</option><option>ApexTrigger</option><option>CustomObject</option><option>CustomField</option><option>Flow</option><option>PermissionSet</option><option>Profile</option></select>
+      <textarea id="deployMembers" placeholder="One metadata member per line, e.g.&#10;Account.Customer_Tier__c&#10;MyApexClass"></textarea>
+      <button id="previewDeploy">Preview Package</button>
+      <button class="secondary" id="downloadPackageXml">Download package.xml</button>
+      <button class="secondary" id="downloadDestructiveXml">Download destructiveChanges.xml</button>
+    </div>
+    <div id="deployResult"></div>
+  </section>`;
+
+  let packageXml = '', destructiveXml = '';
+
+  function xml(type, members, destructive=false) {
+    const memberXml = members.map(m=>`        <members>${escapeHtml(m)}</members>`).join(NL);
+    return `<?xml version="1.0" encoding="UTF-8"?>${NL}<Package xmlns="http://soap.sforce.com/2006/04/metadata">${NL}    <types>${NL}${memberXml}${NL}        <name>${escapeHtml(type)}</name>${NL}    </types>${NL}    <version>66.0</version>${NL}</Package>`;
+  }
+
+  $('#previewDeploy').onclick = () => {
+    const type    = $('#deployType').value;
+    const members = $('#deployMembers').value.split(/\n|,/).map(x=>x.trim()).filter(Boolean);
+    if (!members.length) return toast('Enter at least one metadata member.');
+    packageXml    = xml(type, members, false);
+    destructiveXml = xml(type, members, true);
+    $('#deployResult').innerHTML = `<h3>Deployment Preview</h3><p class="muted">Review before deploying with Salesforce CLI or Metadata API.</p>${pre(packageXml)}`;
+  };
+
+  $('#downloadPackageXml').onclick = () => packageXml ? chrome.runtime.sendMessage({ type:'DOWNLOAD_TEXT', filename:'package.xml', mime:'application/xml', content:packageXml }) : toast('Preview package first.');
+  $('#downloadDestructiveXml').onclick = () => destructiveXml ? chrome.runtime.sendMessage({ type:'DOWNLOAD_TEXT', filename:'destructiveChanges.xml', mime:'application/xml', content:destructiveXml }) : toast('Preview package first.');
+}
+
+// ── Agentforce Inspector — Enhancement #14 ────────────────────────────────────
+async function agents() {
+  view().innerHTML = `<section class="card">
+    <h3>Agentforce Inspector <span class="badge info">NEW in v5</span></h3>
+    <p class="muted">Inspect Einstein Copilot / Agentforce bot definitions, versions, topics, and actions via Tooling API.</p>
+    <div class="toolbar">
+      <button id="loadBots">Load Bots / Agents</button>
+      <button class="secondary" id="exportBots">Export CSV</button>
+    </div>
+    <div id="botsList"></div>
+    <div id="botDetail"></div>
+  </section>`;
+
+  let allBots = [];
+
+  $('#loadBots').onclick = async () => {
+    const resEl = $('#botsList');
+    resEl.innerHTML = '<p class="muted">Querying BotDefinition via Tooling API…</p>';
+    try {
+      const r = await requireApi().toolingQueryAll(
+        `SELECT Id, DeveloperName, MasterLabel, Type, Status, Description, LastModifiedDate FROM BotDefinition ORDER BY MasterLabel`,
+        { maxRecords: 500 }
+      );
+      allBots = r.records || [];
+      if (!allBots.length) {
+        resEl.innerHTML = '<p class="muted">No BotDefinition records found. Agentforce / Einstein Copilot may not be provisioned in this org, or the session may have expired — try Re-check Health on the Dashboard first.</p>';
+        return;
+      }
+      resEl.innerHTML = table(allBots.map(b => ({
+        Name: b.MasterLabel, DeveloperName: b.DeveloperName,
+        Type: b.Type, Status: b.Status, Modified: timeAgo(b.LastModifiedDate),
+        Description: (b.Description||'').substring(0,80)
+      })), id => `<button data-inspect-bot="${escapeHtml(id)}">Inspect</button>`);
+
+      document.querySelectorAll('[data-inspect-bot]').forEach(btn =>
+        btn.onclick = async () => {
+          const bot = allBots.find(b => b.Id === btn.dataset.inspectBot);
+          if (!bot) return;
+          await inspectBot(bot);
+        }
+      );
+    } catch (e) {
+      const isExpired = /HTTP 401|HTTP 403|INVALID_SESSION|expired|undefined/i.test(e.message);
+      resEl.innerHTML = `<div class="notice" style="border-left:3px solid #f87171">
+        <b>${isExpired ? 'Session expired' : 'Could not load bots'}</b><br>
+        ${escapeHtml(e.message)}<br><br>
+        ${isExpired ? 'Your Salesforce session has expired. Go to <b>Dashboard → Session Recovery</b> to reconnect without re-entering credentials.' : 'BotDefinition may not be available in this org. Agentforce requires a Salesforce org with the feature enabled.'}
+      </div>`;
+    }
+  };
+
+  async function inspectBot(bot) {
+    const detail = $('#botDetail');
+    detail.innerHTML = `<p class="muted">Loading actions for ${escapeHtml(bot.MasterLabel)}…</p>`;
+    try {
+      // Load bot versions
+      const versions = await requireApi().toolingQueryAll(
+        `SELECT Id, VersionNumber, Status, LastModifiedDate FROM BotVersion WHERE BotDefinitionId='${bot.Id}' ORDER BY VersionNumber DESC`,
+        { maxRecords: 50 }
+      );
+      // Load bot actions/topics — try GenAiPlugin if BotAction not available
+      let actions = { records: [] };
+      try {
+        actions = await requireApi().toolingQueryAll(
+          `SELECT Id, DeveloperName, MasterLabel, Type, Description FROM BotCustomAction WHERE BotDefinitionId='${bot.Id}' ORDER BY MasterLabel`,
+          { maxRecords: 200 }
+        );
+      } catch (_) {
+        try {
+          actions = await requireApi().toolingQueryAll(
+            `SELECT Id, DeveloperName, MasterLabel, Description FROM GenAiPlugin WHERE BotDefinitionId='${bot.Id}' ORDER BY MasterLabel`,
+            { maxRecords: 200 }
+          );
+        } catch (_2) { /* actions API not available in this API version */ }
+      }
+
+      detail.innerHTML = `
+        <h4 style="margin:16px 0 8px">${escapeHtml(bot.MasterLabel)} — Versions (${versions.records?.length || 0})</h4>
+        ${table((versions.records||[]).map(v=>({Version:v.VersionNumber, Status:v.Status, Modified:timeAgo(v.LastModifiedDate)})))}
+        <h4 style="margin:16px 0 8px">Actions / Topics (${actions.records?.length || 0})</h4>
+        ${actions.records?.length ? table(actions.records.map(a=>({
+          Name: a.MasterLabel, DeveloperName: a.DeveloperName,
+          Type: a.Type||'—', Description: (a.Description||'').substring(0,100)
+        }))) : '<p class="muted">No actions found for this bot.</p>'}
+        <h4 style="margin:16px 0 8px">Raw Definition</h4>
+        ${pre({ id: bot.Id, developerName: bot.DeveloperName, type: bot.Type, status: bot.Status, description: bot.Description })}`;
+    } catch (e) {
+      detail.innerHTML = `<p class="error-note">Could not load bot details: ${escapeHtml(e.message)}</p>`;
+    }
+  }
+
+  $('#exportBots').onclick = () => {
+    if (!allBots.length) return toast('Load bots first.');
+    chrome.runtime.sendMessage({ type:'DOWNLOAD_TEXT', filename:'sf-forge-agents.csv', mime:'text/csv', content:toCsv(allBots) });
+  };
+}
+
+
+// ── API Limits Dashboard ──────────────────────────────────────────────────────
+async function limitsView() {
+  view().innerHTML = `<section class="card">
+    <h3>API Limits <span class="badge info">Live usage</span></h3>
+    <p class="muted">Org API limit consumption. Auto-refreshes every 60 seconds while this view is active.</p>
+    <div class="toolbar">
+      <button id="refreshLimits">Refresh Now</button>
+      <button class="secondary" id="exportLimits">Export CSV</button>
+    </div>
+    <div id="limitsBody" style="margin-top:12px"></div>
+  </section>`;
+
+  let limitsHistory = {}, limitsData = {}, refreshTimer = null;
+
+  function renderLimits(limits) {
+    const entries = Object.entries(limits).sort((a,b)=>a[0].localeCompare(b[0]));
+    const rows = entries.map(([name, val]) => {
+      const max = val.Max || 0, rem = val.Remaining ?? 0;
+      const used = max > 0 ? max - rem : 0;
+      const pct  = max > 0 ? Math.round(used / max * 100) : 0;
+      const colour = pct >= 90 ? '#f87171' : pct >= 70 ? '#fbbf24' : '#4ade80';
+      // Sparkline from history
+      const hist = limitsHistory[name] || [];
+      const sparkPts = hist.slice(-10).map((p,i) => {
+        const x = i * 14 + 4;
+        const y = 16 - Math.round(p * 14);
+        return `${x},${y}`;
+      }).join(' ');
+      const spark = hist.length > 1
+        ? `<svg width="140" height="18" style="vertical-align:middle;margin-left:8px"><polyline points="${sparkPts}" fill="none" stroke="${colour}" stroke-width="1.5"/></svg>`
+        : '';
+      return `<tr>
+        <td style="font-size:12px;padding:4px 8px 4px 0;white-space:nowrap">${escapeHtml(name)}</td>
+        <td style="padding:4px 8px">
+          <div style="background:var(--panel2);border-radius:4px;height:8px;width:160px;overflow:hidden">
+            <div style="background:${colour};height:100%;width:${pct}%;transition:width .3s;border-radius:4px"></div>
+          </div>
+        </td>
+        <td style="font-size:12px;color:${colour};padding:4px 8px">${pct}%</td>
+        <td style="font-size:11px;color:var(--muted);padding:4px 0">${used.toLocaleString()} / ${max.toLocaleString()}${spark}</td>
+      </tr>`;
+    }).join('');
+    $('#limitsBody').innerHTML = `<table style="width:100%"><tbody>${rows}</tbody></table>`;
+  }
+
+  async function doRefresh() {
+    try {
+      const data = await requireApi().limits();
+      limitsData = data;
+      Object.entries(data).forEach(([k,v]) => {
+        if (!limitsHistory[k]) limitsHistory[k] = [];
+        const pct = v.Max > 0 ? (v.Max - (v.Remaining??0)) / v.Max : 0;
+        limitsHistory[k].push(pct);
+        if (limitsHistory[k].length > 10) limitsHistory[k].shift();
+      });
+      renderLimits(data);
+    } catch(e) { toast(e.message, 4000); }
+  }
+
+  $('#refreshLimits').onclick = doRefresh;
+  $('#exportLimits').onclick  = () => {
+    if (!Object.keys(limitsData).length) return toast('Load limits first.');
+    const rows = Object.entries(limitsData).map(([k,v]) => ({ Limit: k, Max: v.Max, Remaining: v.Remaining, Used: v.Max - (v.Remaining??0), PctUsed: v.Max>0 ? Math.round((v.Max-(v.Remaining??0))/v.Max*100)+'%' : 'N/A' }));
+    chrome.runtime.sendMessage({ type:'DOWNLOAD_TEXT', filename:'sf-forge-limits.csv', mime:'text/csv', content:toCsv(rows) });
+  };
+
+  await doRefresh();
+  refreshTimer = setInterval(doRefresh, 60000);
+  // Clear timer when user navigates away
+  const origRender = render;
+  window._limitsCleanup = () => { if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; } };
+}
+
+// ── Apex Job Monitor ──────────────────────────────────────────────────────────
+async function jobMonitor() {
+  view().innerHTML = `<section class="card">
+    <h3>Apex Job Monitor <span class="badge info">Async + Scheduled</span></h3>
+    <p class="muted">Live view of queued, running, and recent Apex batch and scheduled jobs. Auto-refreshes every 30 seconds.</p>
+    <div class="toolbar">
+      <select id="jobTypeFilter">
+        <option value="">All types</option>
+        <option>BatchApex</option><option>ScheduledApex</option>
+        <option>Future</option><option>Queueable</option><option>ApexToken</option>
+      </select>
+      <select id="jobStatusFilter">
+        <option value="">All statuses</option>
+        <option>Queued</option><option>Processing</option><option>Completed</option>
+        <option>Failed</option><option>Aborted</option><option>Holding</option>
+      </select>
+      <button id="refreshJobs">Refresh</button>
+      <button class="secondary" id="exportJobs">Export CSV</button>
+    </div>
+    <div id="jobsBody" style="margin-top:8px"></div>
+    <div id="cronJobs" style="margin-top:16px"></div>
+  </section>`;
+
+  let allJobs = [], cronData = [], jobTimer = null;
+
+  async function loadJobs() {
+    try {
+      const type   = $('#jobTypeFilter').value;
+      const status = $('#jobStatusFilter').value;
+      let soql = 'SELECT Id, JobType, ApexClass.Name, Status, JobItemsProcessed, TotalJobItems, NumberOfErrors, CreatedDate, CompletedDate FROM AsyncApexJob ORDER BY CreatedDate DESC LIMIT 100';
+      const r  = await requireApi().query(soql);
+      allJobs  = r.records || [];
+      let filtered = allJobs;
+      if (type)   filtered = filtered.filter(j => j.JobType === type);
+      if (status) filtered = filtered.filter(j => j.Status === status);
+
+      const rows = filtered.map(j => {
+        const prog = j.TotalJobItems > 0 ? Math.round(j.JobItemsProcessed / j.TotalJobItems * 100) : 0;
+        const sColour = { Processing:'#fbbf24', Completed:'#4ade80', Failed:'#f87171', Aborted:'#f87171' }[j.Status] || 'var(--muted)';
+        const abortBtn = ['Queued','Processing','Holding'].includes(j.Status)
+          ? `<button data-abort-job="${escapeHtml(j.Id)}" style="font-size:11px;padding:2px 6px;color:#f87171">Abort</button>` : '';
+        return { Id:j.Id, Class: j.ApexClass?.Name||'—', Type: j.JobType, Status: j.Status, 
+          Progress: j.TotalJobItems > 0 ? `${j.JobItemsProcessed}/${j.TotalJobItems} (${prog}%)` : '—',
+          Errors: j.NumberOfErrors||0, Created: timeAgo(j.CreatedDate), _abort: abortBtn };
+      });
+
+      $('#jobsBody').innerHTML = filtered.length
+        ? `<div style="overflow-x:auto"><table class="table" style="table-layout:fixed;width:100%">
+            <thead><tr><th>Class</th><th>Type</th><th>Status</th><th>Progress</th><th>Errors</th><th>Created</th><th></th></tr></thead>
+            <tbody>${rows.map(r=>`<tr>
+              <td style="font-size:12px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(r.Class)}</td>
+              <td style="font-size:12px">${escapeHtml(r.Type)}</td>
+              <td style="font-size:12px">${escapeHtml(r.Status)}</td>
+              <td style="font-size:12px">${escapeHtml(r.Progress)}</td>
+              <td style="font-size:12px;${r.Errors>0?'color:#f87171':''}">${r.Errors}</td>
+              <td style="font-size:12px">${escapeHtml(r.Created)}</td>
+              <td>${r._abort}</td>
+            </tr>`).join('')}</tbody>
+          </table></div>`
+        : '<p class="muted">No jobs match filters.</p>';
+
+      document.querySelectorAll('[data-abort-job]').forEach(btn => {
+        btn.onclick = async () => {
+          if (!confirm('Abort this job? This cannot be undone.')) return;
+          try {
+            await requireApi().request(`/services/data/v66.0/sobjects/AsyncApexJob/${btn.dataset.abortJob}`, { method:'DELETE' });
+            toast('Job abort requested.'); loadJobs();
+          } catch(e) { toast(e.message, 5000); }
+        };
+      });
+
+      // Scheduled jobs (CronTrigger)
+      const cr = await requireApi().query('SELECT Id, CronJobDetail.Name, State, NextFireTime, PreviousFireTime, StartTime, EndTime, CronExpression FROM CronTrigger ORDER BY NextFireTime ASC LIMIT 50');
+      cronData = cr.records || [];
+      if (cronData.length) {
+        const cronRows = cronData.map(c => `<tr>
+          <td style="font-size:12px">${escapeHtml(c.CronJobDetail?.Name||'—')}</td>
+          <td style="font-size:12px">${escapeHtml(c.State)}</td>
+          <td style="font-size:12px">${c.NextFireTime ? new Date(c.NextFireTime).toLocaleString() : '—'}</td>
+          <td style="font-size:11px;color:var(--muted)">${escapeHtml(c.CronExpression||'')}</td>
+          <td><button data-abort-cron="${escapeHtml(c.Id)}" style="font-size:11px;padding:2px 6px;color:#f87171">Delete</button></td>
+        </tr>`).join('');
+        $('#cronJobs').innerHTML = `<h4 style="font-size:13px;margin-bottom:8px">Scheduled Jobs (CronTrigger)</h4>
+          <table class="table"><thead><tr><th>Name</th><th>State</th><th>Next Fire</th><th>Cron</th><th></th></tr></thead>
+          <tbody>${cronRows}</tbody></table>`;
+        document.querySelectorAll('[data-abort-cron]').forEach(btn => {
+          btn.onclick = async () => {
+            if (!confirm('Delete this scheduled job?')) return;
+            try {
+              await requireApi().request(`/services/data/v66.0/sobjects/CronTrigger/${btn.dataset.abortCron}`, { method:'DELETE' });
+              toast('Scheduled job deleted.'); loadJobs();
+            } catch(e) { toast(e.message, 5000); }
+          };
+        });
+      }
+    } catch(e) { toast(e.message, 4000); }
+  }
+
+  $('#refreshJobs').onclick = loadJobs;
+  $('#exportJobs').onclick  = () => {
+    if (!allJobs.length) return toast('Load jobs first.');
+    chrome.runtime.sendMessage({ type:'DOWNLOAD_TEXT', filename:'sf-forge-jobs.csv', mime:'text/csv', content:toCsv(allJobs.map(j=>({ Class:j.ApexClass?.Name, Type:j.JobType, Status:j.Status, Processed:j.JobItemsProcessed, Total:j.TotalJobItems, Errors:j.NumberOfErrors, Created:j.CreatedDate }))) });
+  };
+  ['jobTypeFilter','jobStatusFilter'].forEach(id => { const el=$(`#${id}`); if(el) el.onchange=loadJobs; });
+  await loadJobs();
+  jobTimer = setInterval(loadJobs, 30000);
+  window._jobsCleanup = () => { if(jobTimer){clearInterval(jobTimer);jobTimer=null;} };
+}
+
+// ── Trace Flag Manager ────────────────────────────────────────────────────────
+async function traceFlagManager() {
+  view().innerHTML = `<section class="card">
+    <h3>Trace Flag Manager <span class="badge info">Debug log control</span></h3>
+    <p class="muted">Set and manage Apex debug log trace flags without leaving SF Forge. Trace flags control which debug events are captured per user.</p>
+    <div class="toolbar">
+      <button id="loadTraceFlags">Load Active Flags</button>
+    </div>
+    <div id="traceFlagList"></div>
+    <h4 style="margin:16px 0 8px">New Trace Flag</h4>
+    <div class="grid">
+      <div class="field span6">
+        <label>Traced Entity (User ID or Apex class ID)</label>
+        <input id="tfEntityId" placeholder="User or Class ID — paste from SOQL">
+        <small class="muted">Run: SELECT Id, Name FROM User WHERE Name = 'Your Name' to get a User ID</small>
+      </div>
+      <div class="field span6">
+        <label>Expiration (minutes from now)</label>
+        <input id="tfExpiry" type="number" value="60" min="1" max="1440">
+      </div>
+      <div class="field span3">
+        <label>Apex Code</label>
+        <select id="tfApex"><option>DEBUG</option><option>FINE</option><option>FINER</option><option>FINEST</option><option>INFO</option><option>WARN</option><option>ERROR</option><option>NONE</option></select>
+      </div>
+      <div class="field span3">
+        <label>Apex Profiling</label>
+        <select id="tfProf"><option>NONE</option><option>DEBUG</option><option>FINE</option><option>INFO</option></select>
+      </div>
+      <div class="field span3">
+        <label>DB</label>
+        <select id="tfDb"><option>DEBUG</option><option>INFO</option><option>FINE</option><option>NONE</option></select>
+      </div>
+      <div class="field span3">
+        <label>Callout</label>
+        <select id="tfCallout"><option>INFO</option><option>DEBUG</option><option>FINE</option><option>NONE</option></select>
+      </div>
+    </div>
+    <div class="toolbar"><button id="createTraceFlag">Create Trace Flag</button></div>
+    <div id="tfResult"></div>
+  </section>`;
+
+  async function loadFlags() {
+    try {
+      const r = await requireApi().toolingQuery(
+        'SELECT Id, TracedEntityId, TracedEntity.Name, LogType, ExpirationDate, DebugLevel.ApexCode, DebugLevel.ApexProfiling, DebugLevel.Database, DebugLevel.Callout FROM TraceFlag ORDER BY ExpirationDate DESC LIMIT 50'
+      );
+      const flags = r.records || [];
+      if (!flags.length) { $('#traceFlagList').innerHTML = '<p class="muted">No active trace flags.</p>'; return; }
+      const rows = flags.map(f => {
+        const expired = new Date(f.ExpirationDate) < new Date();
+        return `<tr style="${expired?'opacity:.5':''}">
+          <td style="font-size:12px">${escapeHtml(f.TracedEntity?.Name||f.TracedEntityId||'—')}</td>
+          <td style="font-size:12px">${escapeHtml(f.LogType||'')}</td>
+          <td style="font-size:12px">${escapeHtml(f.DebugLevel?.ApexCode||'')}</td>
+          <td style="font-size:12px">${f.ExpirationDate ? new Date(f.ExpirationDate).toLocaleString() : '—'}${expired?' <span style="color:#f87171;font-size:10px">(expired)</span>':''}</td>
+          <td><button data-del-flag="${escapeHtml(f.Id)}" style="font-size:11px;padding:2px 6px;color:#f87171">Delete</button></td>
+        </tr>`;
+      }).join('');
+      $('#traceFlagList').innerHTML = `<table class="table"><thead><tr><th>Entity</th><th>Type</th><th>Apex Level</th><th>Expires</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+      document.querySelectorAll('[data-del-flag]').forEach(btn => {
+        btn.onclick = async () => {
+          try {
+            await requireApi().tooling(`/sobjects/TraceFlag/${btn.dataset.delFlag}`, { method:'DELETE' });
+            toast('Trace flag deleted.'); loadFlags();
+          } catch(e) { toast(e.message, 5000); }
+        };
+      });
+    } catch(e) { toast(e.message, 4000); }
+  }
+
+  $('#loadTraceFlags').onclick = loadFlags;
+
+  $('#createTraceFlag').onclick = async () => {
+    const entityId = $('#tfEntityId').value.trim();
+    if (!entityId) return toast('Enter an entity ID (User or Apex Class).');
+    const expiryMin = parseInt($('#tfExpiry').value) || 60;
+    const expiryDate = new Date(Date.now() + expiryMin * 60000).toISOString();
+    const btn = $('#createTraceFlag');
+    btn.disabled = true; btn.textContent = 'Creating…';
+    try {
+      // Create a DebugLevel first
+      const dl = await requireApi().tooling('/sobjects/DebugLevel', {
+        method: 'POST',
+        body: JSON.stringify({
+          DeveloperName: 'SFForge_' + Date.now(),
+          MasterLabel: 'SF Forge Debug',
+          ApexCode: $('#tfApex').value,
+          ApexProfiling: $('#tfProf').value,
+          Database: $('#tfDb').value,
+          Callout: $('#tfCallout').value,
+          System: 'DEBUG', Validation: 'INFO', Visualforce: 'INFO', Workflow: 'INFO'
+        })
+      });
+      await requireApi().tooling('/sobjects/TraceFlag', {
+        method: 'POST',
+        body: JSON.stringify({
+          TracedEntityId: entityId,
+          DebugLevelId: dl.id,
+          LogType: 'USER_DEBUG',
+          StartDate: new Date().toISOString(),
+          ExpirationDate: expiryDate
+        })
+      });
+      $('#tfResult').innerHTML = '<p class="badge ok" style="margin-top:8px">Trace flag created. Debug logs will be captured.</p>';
+      toast('Trace flag created — logs will appear in Debug Logs.');
+      loadFlags();
+    } catch(e) {
+      $('#tfResult').innerHTML = `<p class="error-note">${escapeHtml(e.message)}</p>`;
+    } finally { btn.disabled = false; btn.textContent = 'Create Trace Flag'; }
+  };
+
+  await loadFlags();
+}
+
+// ── Security Health Scan ──────────────────────────────────────────────────────
+async function securityScan() {
+  view().innerHTML = `<section class="card">
+    <h3>Security Health Scan <span class="badge warn">Read-only audit</span></h3>
+    <p class="muted">One-click org security checklist covering guest access, password policy, sharing settings, and high-risk permission sets.</p>
+    <div class="toolbar">
+      <button id="runSecScan">Run Security Scan</button>
+      <button class="secondary" id="exportSecurity">Export Report</button>
+    </div>
+    <div id="secResults" style="margin-top:12px"></div>
+  </section>`;
+
+  let scanResults = [];
+
+  function finding(name, status, detail, recommendation) {
+    const icon = status === 'pass' ? '✓' : status === 'warn' ? '⚠' : '✗';
+    const col  = status === 'pass' ? '#4ade80' : status === 'warn' ? '#fbbf24' : '#f87171';
+    return `<div style="border-left:3px solid ${col};padding:8px 12px;margin-bottom:8px;background:var(--panel2);border-radius:0 6px 6px 0">
+      <div style="display:flex;gap:8px;align-items:center">
+        <span style="color:${col};font-size:16px;font-weight:500">${icon}</span>
+        <b style="font-size:13px">${escapeHtml(name)}</b>
+        <span style="font-size:11px;color:${col};margin-left:auto;text-transform:uppercase">${status}</span>
+      </div>
+      <p style="font-size:12px;color:var(--muted);margin:4px 0 0 24px">${escapeHtml(detail)}</p>
+      ${recommendation ? `<p style="font-size:11px;color:var(--purple2);margin:2px 0 0 24px">→ ${escapeHtml(recommendation)}</p>` : ''}
+    </div>`;
+  }
+
+  $('#runSecScan').onclick = async () => {
+    const btn = $('#runSecScan');
+    btn.disabled = true; btn.textContent = 'Scanning…';
+    const res = $('#secResults');
+    res.innerHTML = '<p class="muted">Running checks…</p>';
+    scanResults = [];
+    let html = '';
+
+    const check = async (name, fn) => {
+      try { return await fn(); }
+      catch(e) { return { status:'warn', detail: 'Could not check: ' + e.message }; }
+    };
+
+    // 1. Guest user profile check
+    const guestCheck = await check('Guest User Field Access', async () => {
+      const r = await requireApi().query("SELECT Id, Name, UserType FROM User WHERE UserType = 'Guest' LIMIT 10");
+      if (!r.records?.length) return { status:'pass', detail:'No guest users detected.' };
+      return { status:'warn', detail:`${r.records.length} guest user${r.records.length>1?'s':''} found. Review their profile permissions.`, rec:'Audit guest user profile object and field permissions in Setup → Profiles.' };
+    });
+    html += finding('Guest User Accounts', guestCheck.status, guestCheck.detail, guestCheck.rec);
+    scanResults.push({ Check:'Guest User Accounts', ...guestCheck });
+
+    // 2. Password policy
+    const pwCheck = await check('Password Complexity Policy', async () => {
+      const r = await requireApi().query("SELECT Id, PasswordComplexity, PasswordExpiration, PasswordHistoryRestriction, MinPasswordLength FROM Profile WHERE Name = 'System Administrator' LIMIT 1");
+      const p = r.records?.[0];
+      if (!p) return { status:'warn', detail:'Could not retrieve password policy.' };
+      const issues = [];
+      if ((p.MinPasswordLength||0) < 8) issues.push('min length < 8');
+      if (!p.PasswordComplexity || p.PasswordComplexity < 3) issues.push('low complexity requirement');
+      if (!p.PasswordExpiration) issues.push('no password expiry');
+      return issues.length
+        ? { status:'warn', detail:`Issues: ${issues.join(', ')}.`, rec:'Strengthen password policy in Setup → Password Policies.' }
+        : { status:'pass', detail:'Password policy meets basic security requirements.' };
+    });
+    html += finding('Password Policy', pwCheck.status, pwCheck.detail, pwCheck.rec);
+    scanResults.push({ Check:'Password Policy', ...pwCheck });
+
+    // 3. Profiles with Modify All Data
+    const madCheck = await check('Modify All Data Permission', async () => {
+      const r = await requireApi().query("SELECT Id, Name FROM Profile WHERE PermissionsModifyAllData = true ORDER BY Name LIMIT 20");
+      const names = (r.records||[]).map(p=>p.Name).join(', ');
+      if (!r.records?.length) return { status:'pass', detail:'No profiles with Modify All Data found (custom profiles only).' };
+      return { status: r.records.length > 3 ? 'fail' : 'warn', detail:`${r.records.length} profile${r.records.length>1?'s':''} have Modify All Data: ${names}.`, rec:'Restrict Modify All Data to System Administrator profile only.' };
+    });
+    html += finding('Modify All Data Profiles', madCheck.status, madCheck.detail, madCheck.rec);
+    scanResults.push({ Check:'Modify All Data', ...madCheck });
+
+    // 4. Profiles with View All Data
+    const vadCheck = await check('View All Data Permission', async () => {
+      const r = await requireApi().query("SELECT Id, Name FROM Profile WHERE PermissionsViewAllData = true ORDER BY Name LIMIT 20");
+      return r.records?.length
+        ? { status:'warn', detail:`${r.records.length} profile${r.records.length>1?'s':''} have View All Data.`, rec:'Audit View All Data access — use permission sets instead of profiles where possible.' }
+        : { status:'pass', detail:'View All Data is not granted to any custom profiles.' };
+    });
+    html += finding('View All Data Profiles', vadCheck.status, vadCheck.detail, vadCheck.rec);
+    scanResults.push({ Check:'View All Data', ...vadCheck });
+
+    // 5. API-enabled profiles (non-admin)
+    const apiCheck = await check('API Access Policy', async () => {
+      const r = await requireApi().query("SELECT Id, Name FROM Profile WHERE PermissionsApiEnabled = true AND Name != 'System Administrator' AND UserType = 'Standard' ORDER BY Name LIMIT 30");
+      return r.records?.length
+        ? { status:'warn', detail:`${r.records.length} non-admin profile${r.records.length>1?'s':''} have API access.`, rec:'Review whether all API-enabled profiles genuinely need API access.' }
+        : { status:'pass', detail:'API access is restricted to administrator profiles.' };
+    });
+    html += finding('API Access (Non-Admin)', apiCheck.status, apiCheck.detail, apiCheck.rec);
+    scanResults.push({ Check:'API Access', ...apiCheck });
+
+    // 6. Active named credentials (informational)
+    const ncCheck = await check('Named Credentials', async () => {
+      const r = await requireApi().query("SELECT Id, DeveloperName, Endpoint FROM NamedCredential ORDER BY DeveloperName LIMIT 20");
+      if (!r.records?.length) return { status:'pass', detail:'No named credentials found.' };
+      const names = r.records.map(n=>n.DeveloperName).join(', ');
+      return { status:'warn', detail:`${r.records.length} named credential${r.records.length>1?'s':''}: ${names}.`, rec:'Review each named credential endpoint and ensure credentials are rotated regularly.' };
+    });
+    html += finding('Named Credentials', ncCheck.status, ncCheck.detail, ncCheck.rec);
+    scanResults.push({ Check:'Named Credentials', ...ncCheck });
+
+    // 7. Permission sets with Modify All Data
+    const psCheck = await check('Permission Sets — Modify All Data', async () => {
+      const r = await requireApi().query("SELECT Id, Name, Label FROM PermissionSet WHERE PermissionsModifyAllData = true AND IsOwnedByProfile = false ORDER BY Label LIMIT 20");
+      if (!r.records?.length) return { status:'pass', detail:'No permission sets grant Modify All Data.' };
+      const names = r.records.map(p=>p.Label||p.Name).join(', ');
+      return { status:'fail', detail:`${r.records.length} permission set${r.records.length>1?'s':''} grant Modify All Data: ${names}.`, rec:'Revoke Modify All Data from permission sets — assign only to System Administrator profile.' };
+    });
+    html += finding('Permission Sets — Modify All Data', psCheck.status, psCheck.detail, psCheck.rec);
+    scanResults.push({ Check:'PermSet Modify All Data', ...psCheck });
+
+    // Summary
+    const pass = scanResults.filter(r=>r.status==='pass').length;
+    const warn = scanResults.filter(r=>r.status==='warn').length;
+    const fail = scanResults.filter(r=>r.status==='fail').length;
+    const summary = `<div style="display:flex;gap:16px;margin-bottom:16px;padding:10px 14px;background:var(--panel2);border-radius:8px">
+      <span style="color:#4ade80;font-size:13px">✓ ${pass} passed</span>
+      <span style="color:#fbbf24;font-size:13px">⚠ ${warn} warnings</span>
+      <span style="color:#f87171;font-size:13px">✗ ${fail} failed</span>
+    </div>`;
+    res.innerHTML = summary + html;
+    btn.disabled = false; btn.textContent = 'Run Security Scan';
+  };
+
+  $('#exportSecurity').onclick = () => {
+    if (!scanResults.length) return toast('Run the scan first.');
+    chrome.runtime.sendMessage({ type:'DOWNLOAD_TEXT', filename:'sf-forge-security-scan.csv', mime:'text/csv', content:toCsv(scanResults) });
+  };
+}
+
+// ── Saved Workspace — Enhancement #8: SOQL templates per object ───────────────
+async function workspace() {
+  const key   = api?.key || 'global';
+  const store  = await chrome.storage.local.get('sfForgeWorkspace');
+  const all    = store.sfForgeWorkspace || {};
+  const ws     = all[key] || { favoriteObjects: [], recentSoql: [], metadataSearches: [], notes: '', soqlTemplates: [] };
+
+  view().innerHTML = `<section class="card">
+    <h3>Saved Workspace <span class="badge info">Per Org</span></h3>
+    <p class="muted">Save favorite objects, recent SOQL, metadata searches, notes, and named SOQL templates for the active org.</p>
+    <div class="grid">
+      <div class="field span6"><label>Favorite Objects</label><textarea id="wsObjects">${escapeHtml((ws.favoriteObjects||[]).join(NL))}</textarea></div>
+      <div class="field span6"><label>Recent SOQL</label><textarea id="wsSoql">${escapeHtml((ws.recentSoql||[]).join(NL))}</textarea></div>
+      <div class="field span6"><label>Metadata Searches</label><textarea id="wsMeta">${escapeHtml((ws.metadataSearches||[]).join(NL))}</textarea></div>
+      <div class="field span6"><label>Workspace Notes</label><textarea id="wsNotes">${escapeHtml(ws.notes||'')}</textarea></div>
+    </div>
+    <div class="toolbar"><button id="saveWorkspace">Save Workspace</button><button class="secondary" id="exportWorkspace">Export JSON</button></div>
+
+    <h4 style="margin:20px 0 8px">SOQL Templates <span class="badge info">Run in Inspector</span></h4>
+    <p class="muted">Named queries you can run directly from the workspace.</p>
+    <div id="soqlTemplates">${renderTemplates(ws.soqlTemplates||[])}</div>
+    <div class="toolbar" style="margin-top:8px">
+      <input id="tmplName" placeholder="Template name">
+      <textarea id="tmplSoql" placeholder="SELECT Id, Name FROM Account LIMIT 10" style="min-height:60px"></textarea>
+      <button id="addTemplate">Add Template</button>
+    </div>
+  </section>`;
+
+  function renderTemplates(templates) {
+    if (!templates.length) return '<p class="muted">No templates yet.</p>';
+    return templates.map((t,i)=>`<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+      <span style="flex:1;font-size:13px">${escapeHtml(t.name)}</span>
+      <button data-run-tmpl="${i}">Run</button>
+      <button class="danger" data-del-tmpl="${i}">✕</button>
+    </div>`).join('');
+  }
+
+  function bindTemplates(templates) {
+    document.querySelectorAll('[data-run-tmpl]').forEach(btn => {
+      const t = templates[parseInt(btn.dataset.runTmpl)];
+      btn.onclick = () => { active = 'inspector'; render().then(() => { const el = $('#soql'); if (el) el.value = t.soql; }); };
+    });
+    document.querySelectorAll('[data-del-tmpl]').forEach(btn => {
+      btn.onclick = async () => {
+        templates.splice(parseInt(btn.dataset.delTmpl), 1);
+        ws.soqlTemplates = templates;
+        all[key] = ws;
+        await chrome.storage.local.set({ sfForgeWorkspace: all });
+        $('#soqlTemplates').innerHTML = renderTemplates(templates);
+        bindTemplates(templates);
+      };
+    });
+  }
+
+  bindTemplates(ws.soqlTemplates || []);
+
+  $('#addTemplate').onclick = async () => {
+    const name = $('#tmplName').value.trim();
+    const soql = $('#tmplSoql').value.trim();
+    if (!name || !soql) return toast('Enter a name and SOQL query.');
+    ws.soqlTemplates = [...(ws.soqlTemplates||[]), { name, soql }];
+    all[key] = ws;
+    await chrome.storage.local.set({ sfForgeWorkspace: all });
+    $('#soqlTemplates').innerHTML = renderTemplates(ws.soqlTemplates);
+    bindTemplates(ws.soqlTemplates);
+    $('#tmplName').value = '';
+    $('#tmplSoql').value = '';
+    toast('Template added.');
+  };
+
+  $('#saveWorkspace').onclick = async () => {
+    all[key] = {
+      ...ws,
+      favoriteObjects:   $('#wsObjects').value.split(NL).map(x=>x.trim()).filter(Boolean),
+      recentSoql:        $('#wsSoql').value.split(NL).map(x=>x.trim()).filter(Boolean),
+      metadataSearches:  $('#wsMeta').value.split(NL).map(x=>x.trim()).filter(Boolean),
+      notes:             $('#wsNotes').value
+    };
+    await chrome.storage.local.set({ sfForgeWorkspace: all });
+    toast('Workspace saved.');
+  };
+
+  $('#exportWorkspace').onclick = () => chrome.runtime.sendMessage({ type:'DOWNLOAD_TEXT', filename:'sf-forge-workspace.json', mime:'application/json', content:JSON.stringify(ws,null,2) });
+}
+
+// ── Theme Engine ──────────────────────────────────────────────────────────────
+async function themeEngine() {
+  await loadThemeSettings();
+  const presetOptions = Object.entries(THEME_PRESETS).map(([key, p]) =>
+    `<option value="${key}" ${themeSettings.theme === key ? 'selected' : ''}>${p.label}</option>`
+  ).join('');
+  view().innerHTML = `<div class="grid">
+    <section class="card span6">
+      <h3>Dark Fenrir Theme Engine <span class="badge info">Live Preview</span></h3>
+      <div class="field"><label>Theme Preset</label><select id="themePreset">${presetOptions}</select></div>
+      <div class="field"><label>Accent Color</label><input id="accentColor" type="color" value="${escapeHtml(themeSettings.accent || THEME_PRESETS[themeSettings.theme].accent)}"></div>
+      <div class="field"><label>Density</label><select id="density"><option value="comfortable" ${themeSettings.density==='comfortable'?'selected':''}>Comfortable</option><option value="compact" ${themeSettings.density==='compact'?'selected':''}>Compact</option></select></div>
+      <div class="field"><label>Enterprise Scale</label><select id="scale"><option value="standard" ${themeSettings.scale==='standard'?'selected':''}>Standard</option><option value="large" ${themeSettings.scale==='large'?'selected':''}>Large enterprise mode</option></select></div>
+      <div class="toolbar"><button id="saveTheme">Save Theme</button><button class="secondary" id="resetTheme">Reset</button></div>
+    </section>
+    <section class="card span6 theme-preview">
+      <h3>Preview</h3>
+      <div class="theme-swatch-row"><span class="swatch main"></span><span class="swatch alt"></span><span class="swatch panel"></span><span class="swatch bg"></span></div>
+      <article class="org-tile color-purple">
+        <div class="org-tile-head"><div><h4>Full SB</h4><p>Sandbox • active org preview</p></div><span class="badge ok">API Available</span></div>
+        <div class="toolbar"><button>Primary Action</button><button class="secondary">Secondary</button><button class="danger">Danger</button></div>
+      </article>
+    </section>
+  </div>`;
+
+  const updateLive = () => saveThemeSettings({ theme: $('#themePreset').value, accent: $('#accentColor').value, density: $('#density').value, scale: $('#scale').value });
+  $('#themePreset').onchange = async () => { const p = THEME_PRESETS[$('#themePreset').value]; $('#accentColor').value = p.accent; await updateLive(); };
+  $('#accentColor').oninput  = updateLive;
+  $('#density').onchange     = updateLive;
+  $('#scale').onchange       = updateLive;
+  $('#saveTheme').onclick    = async () => { await updateLive(); toast('Theme saved.'); };
+  $('#resetTheme').onclick   = async () => { await saveThemeSettings({ theme:'dark-fenrir', accent:'#8b5cf6', density:'comfortable', scale:'standard' }); toast('Theme reset.'); render(); };
+
+  // Append Update Settings section below the theme grid
+  const updateSection = document.createElement('section');
+  updateSection.className = 'card span12';
+  updateSection.id = 'updateSettingsSection';
+  const grid = view().querySelector('.grid');
+  if (grid) grid.appendChild(updateSection);
+  renderUpdateSettings(updateSection).catch(e => { updateSection.innerHTML = `<p class="error-note">${escapeHtml(e.message)}</p>`; });
+}
+
+// ── Table renderer ─────────────────────────────────────────────────────────────
+function table(records = [], action) {
+  if (!records.length) return '<p class="muted">No rows yet.</p>';
+  const cols = [...new Set(records.flatMap(r => Object.keys(r).filter(k => k !== 'attributes' && !k.startsWith('_'))))].slice(0, 8);
+  const trunc = v => { const s = String(v ?? ''); return s.length > 60 ? s.substring(0, 57) + '…' : s; };
+  return `<div style="overflow-x:auto;width:100%"><table class="table" style="table-layout:fixed;width:100%;word-break:break-word">
+    <thead><tr>${cols.map(c=>`<th style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(c)}</th>`).join('')}${action?'<th style="width:120px">Action</th>':''}</tr></thead>
+    <tbody>${records.map(r =>
+      `<tr>${cols.map(c=>`<td title="${escapeHtml(typeof r[c]==='object'?JSON.stringify(r[c]):String(r[c]??''))}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(typeof r[c]==='object'?JSON.stringify(r[c]):trunc(r[c]))}</td>`).join('')}${action?`<td>${action(r.Id)}</td>`:''}</tr>`
+    ).join('')}</tbody>
+  </table></div>`;
+}
+
+// ── Boot ───────────────────────────────────────────────────────────────────────
+
+// ── Update banner ──────────────────────────────────────────────────────────────
+async function initUpdateBanner() {
+  const banner   = document.getElementById('updateBanner');
+  const textEl   = document.getElementById('updateBannerText');
+  const notesEl  = document.getElementById('updateBannerNotes');
+  const dlBtn    = document.getElementById('updateDownloadBtn');
+  const relBtn   = document.getElementById('updateReleaseBtn');
+  const dismissBtn = document.getElementById('updateDismissBtn');
+  const progressEl = document.getElementById('updateProgress');
+  if (!banner) return;
+
+  let currentState = null;
+
+  async function refreshBanner() {
+    const state = await getUpdateState();
+    currentState = state;
+    if (!state?.hasUpdate || state.dismissed) {
+      banner.classList.remove('visible');
+      return;
+    }
+    const installed = state.installedVersion || chrome.runtime.getManifest().version;
+    textEl.innerHTML = `<b>SF Forge ${escapeHtml(state.latestVersion)} is available</b> &nbsp;<span style="color:var(--muted);font-size:11px">Installed: v${escapeHtml(installed)}</span>`;
+    notesEl.textContent = state.releaseNotes ? state.releaseNotes.split('\n')[0] : '';
+    banner.classList.add('visible');
+  }
+
+  dismissBtn.onclick = async () => {
+    await dismissUpdate();
+    banner.classList.remove('visible');
+    toast('Update dismissed — you can check again from Theme Engine → Update Settings.');
+  };
+
+  relBtn.onclick = () => {
+    if (currentState?.releaseUrl) chrome.tabs.create({ url: currentState.releaseUrl });
+  };
+
+  dlBtn.onclick = async () => {
+    if (!currentState?.downloadUrl) return toast('No download URL found for this release.');
+    dlBtn.disabled = true;
+    progressEl.style.display = '';
+    progressEl.textContent = 'Starting download…';
+    try {
+      await chrome.runtime.sendMessage({
+        type: 'DOWNLOAD_URL',
+        url:  currentState.downloadUrl,
+        filename: `sf-forge-${currentState.latestVersion}.zip`
+      });
+      progressEl.textContent = 'Downloading — check your Downloads folder.';
+      toast(`SF Forge ${currentState.latestVersion} downloading. Unzip to your extension folder, then reload at chrome://extensions.`, 8000);
+      setTimeout(() => {
+        progressEl.style.display = 'none';
+        dlBtn.disabled = false;
+      }, 5000);
+    } catch (e) {
+      progressEl.textContent = '';
+      progressEl.style.display = 'none';
+      dlBtn.disabled = false;
+      toast('Download failed: ' + e.message, 5000);
+    }
+  };
+
+  // Initial check on load
+  await refreshBanner();
+
+  // Also trigger a fresh check from the service worker and re-read after 3s
+  chrome.runtime.sendMessage({ type: 'CHECK_FOR_UPDATES' }).then(async () => {
+    setTimeout(refreshBanner, 3000);
+  }).catch(() => {});
+}
+
+// ── Update settings panel (rendered inside Theme Engine view) ─────────────────
+async function renderUpdateSettings(container) {
+  const config = await getRepoConfig();
+  const state  = await getUpdateState();
+  const installed = chrome.runtime.getManifest().version;
+
+  container.innerHTML = `
+    <h4 style="margin:20px 0 8px;font-size:13px">Update Settings</h4>
+    <p class="muted" style="font-size:12px">SF Forge checks your GitHub repo for new releases. Enter the repo details below to enable auto-checking.</p>
+    <div class="grid" style="margin-top:10px">
+      <div class="field span6">
+        <label>GitHub Owner / Org</label>
+        <input id="upOwner" value="${escapeHtml(config.owner)}" placeholder="e.g. JonMurphey or TrustedTechTeam">
+      </div>
+      <div class="field span6">
+        <label>Repository Name</label>
+        <input id="upRepo" value="${escapeHtml(config.repo)}" placeholder="e.g. sf-forge">
+      </div>
+    </div>
+    <div class="toolbar">
+      <button id="saveRepoBtn">Save & Check Now</button>
+      <button class="secondary" id="checkNowBtn">Check Now</button>
+    </div>
+    <div id="updateStatusBox" style="margin-top:10px;font-size:13px">
+      ${state ? `
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+          <span>Installed: <b>v${escapeHtml(installed)}</b></span>
+          ${state.latestVersion ? `<span>Latest: <b>v${escapeHtml(state.latestVersion)}</b></span>` : ''}
+          ${state.hasUpdate
+            ? `<span style="color:var(--purple2)">&#x2B06; Update available</span>`
+            : `<span style="color:#4ade80">&#x2713; Up to date</span>`
+          }
+          <span style="color:var(--muted);font-size:11px">Last checked: ${timeAgo(state.checkedAt)}</span>
+        </div>
+        ${state.releaseNotes ? `<p style="color:var(--muted);font-size:11px;margin-top:4px;white-space:pre-wrap">${escapeHtml(state.releaseNotes.substring(0,300))}</p>` : ''}
+      ` : `<p class="muted">Not configured — enter your GitHub repo details above to enable update checking.</p>`}
+    </div>`;
+
+  document.getElementById('saveRepoBtn').onclick = async () => {
+    const owner = document.getElementById('upOwner').value.trim();
+    const repo  = document.getElementById('upRepo').value.trim();
+    if (!owner || !repo) return toast('Enter both owner and repo name.');
+    await saveRepoConfig(owner, repo);
+    toast('Repo saved — checking for updates…');
+    document.getElementById('updateStatusBox').innerHTML = '<p class="muted">Checking…</p>';
+    const result = await chrome.runtime.sendMessage({ type: 'CHECK_FOR_UPDATES' });
+    await renderUpdateSettings(container);
+    await initUpdateBanner();
+    toast(result?.state?.hasUpdate ? `Update available: v${result.state.latestVersion}` : 'SF Forge is up to date.');
+  };
+
+  document.getElementById('checkNowBtn').onclick = async () => {
+    const owner = document.getElementById('upOwner').value.trim();
+    const repo  = document.getElementById('upRepo').value.trim();
+    if (!owner || !repo) return toast('Save your GitHub repo details first.');
+    document.getElementById('updateStatusBox').innerHTML = '<p class="muted">Checking…</p>';
+    const result = await chrome.runtime.sendMessage({ type: 'CHECK_FOR_UPDATES' });
+    await renderUpdateSettings(container);
+    toast(result?.state?.hasUpdate ? `Update available: v${result.state.latestVersion}` : 'SF Forge is up to date.');
+  };
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  await loadThemeSettings();
+  setupKeyboardShortcuts();
+  $('#connectBtn').onclick = () => { active = 'connect'; render(); };
+  render();
+  // Run update banner init after first render — non-blocking
+  initUpdateBanner().catch(() => {});
+});

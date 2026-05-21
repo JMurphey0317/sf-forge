@@ -1,0 +1,612 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SF Forge v5.1.1 — User Guide</title>
+<style>
+:root{--bg:#061121;--panel:#0b1830;--panel2:#111f3b;--text:#f8fafc;--muted:#a7b1c5;--purple:#8b5cf6;--purple2:#a78bfa;--cyan:#38bdf8;--green:#4ade80;--amber:#fbbf24;--red:#f87171;--border:rgba(139,92,246,.25)}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0a0f1e;color:var(--text);line-height:1.6;font-size:15px}
+.page{max-width:960px;margin:0 auto;padding:40px 24px 80px}
+.hero{text-align:center;padding:48px 0 40px;border-bottom:1px solid var(--border);margin-bottom:48px}
+.hero h1{font-size:36px;font-weight:700;color:var(--purple2);margin-bottom:8px}
+.hero p{color:var(--muted);font-size:16px}
+.badges{display:flex;gap:8px;justify-content:center;margin-top:16px;flex-wrap:wrap}
+.badge{font-size:12px;padding:4px 10px;border-radius:999px;font-weight:500}
+.bp{background:rgba(139,92,246,.2);color:var(--purple2);border:1px solid rgba(139,92,246,.4)}
+.bb{background:rgba(56,189,248,.15);color:var(--cyan);border:1px solid rgba(56,189,248,.3)}
+.bg{background:rgba(74,222,128,.15);color:var(--green);border:1px solid rgba(74,222,128,.3)}
+.toc{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:24px 28px;margin-bottom:48px}
+.toc h2{font-size:13px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:14px}
+.toc-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 24px}
+.toc a{color:var(--purple2);text-decoration:none;font-size:14px;padding:3px 0;display:block}
+.section{margin-bottom:64px}
+h2.st{font-size:24px;font-weight:700;color:var(--text);margin-bottom:8px;padding-bottom:12px;border-bottom:1px solid var(--border)}
+h3.tt{font-size:16px;font-weight:600;color:var(--purple2);margin:28px 0 10px;display:flex;align-items:center;gap:8px}
+.tag{font-size:10px;padding:2px 7px;border-radius:4px;background:rgba(139,92,246,.2);color:var(--purple2);border:1px solid rgba(139,92,246,.3);font-weight:500}
+p{color:var(--muted);margin-bottom:10px}
+ul,ol{color:var(--muted);padding-left:20px;margin-bottom:12px}
+li{margin-bottom:4px}
+strong{color:var(--text)}
+code{font-family:monospace;font-size:12px;background:rgba(139,92,246,.15);color:var(--purple2);padding:2px 6px;border-radius:4px}
+pre{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:16px;overflow-x:auto;margin:12px 0}
+pre code{background:none;color:var(--cyan);font-size:12px;padding:0}
+.mock{background:var(--panel);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin:20px 0 28px}
+.mtb{background:var(--panel2);border-bottom:1px solid var(--border);padding:9px 16px;display:flex;align-items:center;gap:8px;font-size:12px;font-weight:500}
+.dot{width:9px;height:9px;border-radius:50%}
+.mbody{display:flex;min-height:180px}
+.mnav{width:190px;border-right:1px solid var(--border);padding:10px 0;flex-shrink:0}
+.ng{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;padding:7px 13px 3px;font-weight:600}
+.ni{padding:6px 13px;font-size:12px;color:var(--muted);display:flex;justify-content:space-between;align-items:center}
+.ni.active{background:rgba(139,92,246,.15);color:var(--purple2);border-right:2px solid var(--purple)}
+.npill{font-size:9px;background:rgba(139,92,246,.2);color:var(--purple2);padding:1px 5px;border-radius:3px}
+.mc{flex:1;padding:16px}
+.mc h4{font-size:14px;font-weight:600;color:var(--text);margin-bottom:10px}
+.mcard{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:10px}
+.mtoolbar{display:flex;gap:7px;margin-bottom:10px;flex-wrap:wrap;align-items:center}
+.mbtn{font-size:11px;padding:4px 11px;border-radius:5px;border:none;cursor:default;font-weight:500;white-space:nowrap}
+.mbtn-p{background:var(--purple);color:#fff}
+.mbtn-s{background:transparent;border:1px solid var(--border);color:var(--muted)}
+.mbtn-d{background:rgba(248,113,113,.15);color:var(--red);border:1px solid rgba(248,113,113,.3)}
+.minput{background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:5px;padding:4px 9px;font-size:11px;color:var(--muted)}
+.mta{background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:5px;padding:8px;font-size:11px;color:var(--cyan);font-family:monospace;width:100%;display:block;margin-bottom:8px}
+.mtbl{width:100%;border-collapse:collapse;font-size:11px}
+.mtbl th{text-align:left;padding:5px 7px;color:var(--purple2);border-bottom:1px solid var(--border);font-weight:600}
+.mtbl td{padding:5px 7px;color:var(--muted);border-bottom:1px solid rgba(255,255,255,.04)}
+.mbadge{display:inline-block;font-size:10px;padding:2px 6px;border-radius:999px;font-weight:500}
+.mb-ok{background:rgba(74,222,128,.2);color:var(--green)}
+.mb-warn{background:rgba(251,191,36,.2);color:var(--amber)}
+.mb-err{background:rgba(248,113,113,.2);color:var(--red)}
+.mb-info{background:rgba(56,189,248,.15);color:var(--cyan)}
+.orglk{padding:7px 16px;background:rgba(139,92,246,.1);border-bottom:1px solid var(--border);font-size:12px;color:var(--muted);border-left:3px solid var(--amber)}
+.callout{border-left:3px solid var(--purple);background:rgba(139,92,246,.08);border-radius:0 8px 8px 0;padding:12px 16px;margin:14px 0;font-size:13px;color:var(--muted)}
+.callout.tip{border-color:var(--cyan);background:rgba(56,189,248,.07)}
+.callout.warn{border-color:var(--amber);background:rgba(251,191,36,.07)}
+.steps{list-style:none;padding:0;counter-reset:steps}
+.steps li{counter-increment:steps;display:flex;gap:10px;margin-bottom:9px;font-size:14px;color:var(--muted)}
+.steps li::before{content:counter(steps);min-width:22px;height:22px;border-radius:50%;background:rgba(139,92,246,.25);color:var(--purple2);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;margin-top:1px}
+.lrow{display:flex;align-items:center;gap:9px;margin-bottom:7px;font-size:11px}
+.llbl{width:200px;color:var(--muted);flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lbar-w{flex:1;background:rgba(255,255,255,.08);border-radius:4px;height:6px;overflow:hidden}
+.lbar{height:100%;border-radius:4px}
+.lpct{width:30px;text-align:right;flex-shrink:0;font-size:11px}
+.scheck{border-left:3px solid;padding:8px 12px;margin-bottom:8px;border-radius:0 6px 6px 0;background:rgba(255,255,255,.03)}
+.scheck.pass{border-color:var(--green)}
+.scheck.warn{border-color:var(--amber)}
+.scheck.fail{border-color:var(--red)}
+.sch{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:500;color:var(--text)}
+.scd{font-size:11px;color:var(--muted);margin-top:3px}
+.ubanner{background:rgba(139,92,246,.15);border-bottom:1px solid var(--purple);padding:8px 16px;display:flex;align-items:center;gap:10px;font-size:12px}
+footer{text-align:center;margin-top:64px;padding-top:24px;border-top:1px solid var(--border);color:var(--muted);font-size:13px}
+</style>
+</head>
+<body>
+<div class="page">
+
+<div class="hero">
+  <h1>SF Forge — User Guide</h1>
+  <p>Complete reference for all 18 tools &nbsp;·&nbsp; v5.1.1 &nbsp;·&nbsp; Dark Fenrir Forge</p>
+  <div class="badges">
+    <span class="badge bp">v5.1.1</span>
+    <span class="badge bb">Salesforce API v66.0</span>
+    <span class="badge bb">Manifest v3</span>
+    <span class="badge bg">18 tools</span>
+  </div>
+</div>
+
+<div class="toc">
+  <h2>Contents</h2>
+  <div class="toc-grid">
+    <a href="#install">1. Installation</a>
+    <a href="#connect">2. Connecting to an Org</a>
+    <a href="#dashboard">3. Dashboard</a>
+    <a href="#inspector">4. Inspector &amp; SOQL Runner</a>
+    <a href="#metadata">5. Metadata Studio</a>
+    <a href="#bulk">6. Bulk Field Creator</a>
+    <a href="#flow">7. Flow Analyzer</a>
+    <a href="#lens">8. LWC Lens</a>
+    <a href="#logs">9. Debug Logs</a>
+    <a href="#traceflags">10. Trace Flag Manager</a>
+    <a href="#permissions">11. Permission Inspector</a>
+    <a href="#orgdiff">12. Org Diff</a>
+    <a href="#deploy">13. Deployment Assistant</a>
+    <a href="#rest">14. REST Explorer</a>
+    <a href="#limits">15. API Limits Dashboard</a>
+    <a href="#jobs">16. Apex Job Monitor</a>
+    <a href="#security">17. Security Health Scan</a>
+    <a href="#updates">18. Auto-Update Setup</a>
+  </div>
+</div>
+
+<!-- 1. INSTALL -->
+<div class="section" id="install">
+<h2 class="st">1. Installation</h2>
+<ol class="steps">
+  <li>Download or clone this repository to your local machine.</li>
+  <li>Open Chrome and navigate to <code>chrome://extensions</code>.</li>
+  <li>Toggle <strong>Developer mode</strong> on (top-right corner).</li>
+  <li>Click <strong>Load unpacked</strong> — select the <code>sf-forge</code> folder (the one containing <code>manifest.json</code>).</li>
+  <li>Pin the SF Forge icon to the Chrome toolbar for quick access.</li>
+  <li>Refresh any open Salesforce tabs so content scripts are injected.</li>
+</ol>
+<div class="callout warn"><strong>Updating:</strong> Never remove and re-add the extension. Replace the folder contents and click the <strong>&#x21BB;</strong> refresh icon at <code>chrome://extensions</code>. The extension ID and all settings stay intact.</div>
+<div class="mock">
+  <div class="mtb"><span style="color:var(--muted)">chrome://extensions</span></div>
+  <div style="padding:16px;display:flex;align-items:center;gap:14px;background:var(--panel2)">
+    <div style="width:44px;height:44px;background:var(--panel);border-radius:9px;border:1px solid var(--border);display:flex;align-items:center;justify-content:center">
+      <svg width="26" height="26" viewBox="0 0 40 40" fill="none"><polygon points="20,4 36,32 4,32" stroke="#8b5cf6" stroke-width="2.5" fill="none" stroke-linejoin="round"/><line x1="20" y1="12" x2="20" y2="24" stroke="#a78bfa" stroke-width="2" stroke-linecap="round"/><circle cx="20" cy="28" r="1.5" fill="#a78bfa"/></svg>
+    </div>
+    <div style="flex:1"><div style="font-size:13px;font-weight:600;color:var(--text)">SF Forge</div><div style="font-size:11px;color:var(--muted)">v5.1.1 · Unpacked</div></div>
+    <div class="mbtn mbtn-s">Details</div>
+    <div style="font-size:20px;color:var(--purple2);cursor:default;padding:0 4px" title="Reload extension">&#x21BB;</div>
+  </div>
+</div>
+</div>
+
+<!-- 2. CONNECT -->
+<div class="section" id="connect">
+<h2 class="st">2. Connecting to an Org</h2>
+<p>Every SF Forge tool targets a single <strong>active org</strong>, shown in the colored lock bar below the topbar. Set it using one of three methods.</p>
+<h3 class="tt">Method A — Tab detection <span class="tag">Fastest</span></h3>
+<ol class="steps">
+  <li>Open Salesforce in any Chrome tab and log in normally.</li>
+  <li>Open SF Forge &rarr; click <strong>Detect Open Tabs</strong> on the Dashboard.</li>
+  <li>Click <strong>Use Org</strong> on the detected org tile.</li>
+</ol>
+<h3 class="tt">Method B — Credential login <span class="tag">Persistent</span></h3>
+<ol class="steps">
+  <li>Go to <strong>Connect Org</strong> in the nav.</li>
+  <li>Select Sandbox or Production, enter Username, Password, and Security Token.</li>
+  <li>Set an Alias and Color Tag (amber = sandbox, red = production).</li>
+  <li>Optionally check <strong>Remember credentials</strong> for silent reconnect on expiry.</li>
+  <li>Click <strong>Connect &amp; Save Org</strong>.</li>
+</ol>
+<h3 class="tt">Method C — Session Recovery <span class="tag">When expired</span></h3>
+<ol class="steps">
+  <li>Go to <strong>Dashboard &rarr; Session Recovery</strong>.</li>
+  <li>Click <strong>Extract SID from Open Tab</strong> — reads the <code>sid</code> cookie from any open Salesforce tab.</li>
+  <li>Or click <strong>Paste SID Manually</strong> and enter a Session ID + Instance URL directly.</li>
+</ol>
+<div class="mock">
+  <div class="mtb"><div class="dot" style="background:var(--amber)"></div><span>Active Org: Full Sandbox</span><span style="color:var(--muted);font-size:11px;margin-left:4px">Sandbox</span></div>
+  <div class="mbody">
+    <div class="mnav"><div class="ng">Command Center</div><div class="ni active">Connect Org <span class="npill">Org</span></div></div>
+    <div class="mc">
+      <h4>Connect to Org</h4>
+      <div class="mcard">
+        <div class="mtoolbar">
+          <select class="minput"><option>Sandbox</option><option>Production</option></select>
+          <input class="minput" style="flex:1" value="jon.murphey@trustedtechteam.com.fullsb">
+        </div>
+        <div class="mtoolbar">
+          <input class="minput" type="password" placeholder="Password" style="max-width:120px">
+          <input class="minput" placeholder="Security Token" style="max-width:130px">
+          <input class="minput" placeholder="Alias: Full SB" style="max-width:100px">
+          <select class="minput" style="max-width:80px"><option>amber</option><option>red</option></select>
+        </div>
+        <div class="mtoolbar"><div class="mbtn mbtn-p">Connect &amp; Save Org</div><div class="mbtn mbtn-s">Detect Tabs</div></div>
+      </div>
+      <div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:8px">Stored Org Vault</div>
+      <div style="background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.3);border-radius:8px;padding:10px 12px;display:flex;align-items:center;gap:10px">
+        <div style="width:8px;height:8px;border-radius:50%;background:var(--amber)"></div>
+        <div style="flex:1"><div style="font-size:12px;font-weight:500;color:var(--text)">Full Sandbox</div><div style="font-size:10px;color:var(--muted)">jon.murphey@trustedtechteam.com.fullsb &nbsp;·&nbsp; API v66.0</div></div>
+        <span class="mbadge mb-ok">Active</span>
+        <div class="mbtn mbtn-s" style="font-size:10px">Use Org</div>
+        <div class="mbtn mbtn-d" style="font-size:10px">Delete</div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- 3. DASHBOARD -->
+<div class="section" id="dashboard">
+<h2 class="st">3. Dashboard</h2>
+<p>The Dashboard is the SF Forge home screen: connection status, session health, Smart Org Sessions for switching targets, Session Recovery, a Tool Hub, and quick Salesforce links.</p>
+<div class="mock">
+  <div class="mtb"><div class="dot" style="background:var(--green)"></div><span style="flex:1">SF Forge &nbsp;·&nbsp; Dashboard</span><span class="mbadge mb-ok">Full SB</span><div class="mbtn mbtn-p" style="margin-left:8px">Connect Org</div></div>
+  <div class="ubanner"><span style="font-size:15px">&#x2B06;</span><span style="flex:1;color:var(--text)"><strong>SF Forge 5.2.0 is available</strong> &nbsp;<span style="color:var(--muted);font-size:11px">Installed: v5.1.1</span></span><div class="mbtn mbtn-p">Download update</div><div class="mbtn mbtn-s">View release</div><span style="color:var(--muted);margin-left:4px;cursor:default">&times;</span></div>
+  <div class="orglk"><strong>Active Org:</strong> Full Sandbox &nbsp;<span>Sandbox &nbsp;&middot;&nbsp; all tools target this org only</span></div>
+  <div class="mbody">
+    <div class="mnav"><div class="ng">Command Center</div><div class="ni active">Dashboard <span class="npill">Home</span></div><div class="ni">Connect Org <span class="npill">Org</span></div></div>
+    <div class="mc">
+      <div class="mcard">
+        <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:8px">Command Center</div>
+        <div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:10px">
+          <span class="mbadge mb-ok">Connected</span>
+          <span class="mbadge mb-info">Active: Full Sandbox</span>
+          <span class="mbadge mb-info">1 stored</span>
+          <span class="mbadge mb-info">1 open tab</span>
+        </div>
+        <div class="mtoolbar">
+          <div class="mbtn mbtn-p">Detect Open Tabs</div>
+          <div class="mbtn mbtn-s">Connect / Manage Orgs</div>
+          <div class="mbtn mbtn-s">Reconnect / Refresh</div>
+        </div>
+        <p style="font-size:10px;color:var(--muted);margin-top:8px">Keyboard: <code>Alt+1&#x2013;9</code> switch tools &nbsp;&middot;&nbsp; <code>Ctrl+Enter</code> run active query</p>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- 4. INSPECTOR -->
+<div class="section" id="inspector">
+<h2 class="st">4. Inspector &amp; SOQL Runner</h2>
+<p>The most-used tool in SF Forge. Full SOQL runner with history, visual query builder, column sorting, record detail, and an Object &amp; Field Browser.</p>
+<h3 class="tt">SOQL Runner features</h3>
+<ul>
+  <li><strong>History dropdown</strong> — last 20 queries per org, restored on click</li>
+  <li><strong>Save as</strong> — name any query to persist it in history permanently</li>
+  <li><strong>Column sort</strong> — click any column header to sort ascending/descending</li>
+  <li><strong>Record detail panel</strong> — click any result row for a full field/value drawer with "Open in Salesforce" link</li>
+  <li><strong>Load All Pages</strong> — paginates up to 10,000 records with live progress</li>
+  <li><strong>Download CSV</strong> — exports the current result set</li>
+</ul>
+<h3 class="tt">Visual Query Builder</h3>
+<ol class="steps">
+  <li>Click <strong>Visual Builder</strong> above the SOQL textarea.</li>
+  <li>Select an object — field list loads automatically.</li>
+  <li>Check the fields you want (Id and Name pre-checked).</li>
+  <li>Optionally add WHERE, ORDER BY, and LIMIT.</li>
+  <li>Click <strong>Apply to Query</strong> — the SOQL appears in the textarea ready to run.</li>
+</ol>
+<div class="mock">
+  <div class="orglk"><strong>Active Org:</strong> Full Sandbox</div>
+  <div class="mbody">
+    <div class="mnav"><div class="ng">Build &amp; Inspect</div><div class="ni active">Inspector <span class="npill">Tool</span></div></div>
+    <div class="mc">
+      <div class="mtoolbar">
+        <select class="minput" style="max-width:240px"><option>SELECT Id, Name FROM Account LIMIT 25</option></select>
+      </div>
+      <textarea class="mta">SELECT Id, Name, Industry, AnnualRevenue FROM Account WHERE Industry = 'Technology' ORDER BY AnnualRevenue DESC LIMIT 50</textarea>
+      <div class="mtoolbar">
+        <div class="mbtn mbtn-p">Run Query</div>
+        <div class="mbtn mbtn-s">Load All Pages</div>
+        <div class="mbtn mbtn-s">Download CSV</div>
+        <div class="mbtn mbtn-s">Visual Builder</div>
+      </div>
+      <p style="font-size:11px;color:var(--muted);margin-bottom:8px">4 records &nbsp;&middot;&nbsp; click a row to view full detail</p>
+      <table class="mtbl">
+        <thead><tr><th>Id</th><th>Name</th><th>Industry</th><th>AnnualRevenue</th></tr></thead>
+        <tbody>
+          <tr><td>001Hs00...</td><td>Acme Corp</td><td>Technology</td><td>$12,500,000</td></tr>
+          <tr style="background:rgba(139,92,246,.08)"><td style="color:var(--purple2)">001Hs00...</td><td style="color:var(--purple2)">Initech Inc (selected)</td><td>Technology</td><td>$3,100,000</td></tr>
+        </tbody>
+      </table>
+      <div class="mcard" style="border-color:var(--purple);margin-top:8px">
+        <div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:7px">Record Detail &mdash; Initech Inc</div>
+        <table class="mtbl">
+          <tbody>
+            <tr><td style="color:var(--purple2)">Id</td><td>001Hs000004XkYZIA0</td><td><div class="mbtn mbtn-s" style="font-size:10px">Open in Salesforce &#x2197;</div></td></tr>
+            <tr><td style="color:var(--purple2)">Name</td><td>Initech Inc</td><td></td></tr>
+            <tr><td style="color:var(--purple2)">Industry</td><td>Technology</td><td></td></tr>
+            <tr><td style="color:var(--purple2)">AnnualRevenue</td><td>3100000</td><td></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- 5. METADATA -->
+<div class="section" id="metadata">
+<h2 class="st">5. Metadata Studio</h2>
+<p>Search Apex classes, triggers, LWC/Aura bundles, flows, permission sets, and more via Tooling API. Edit source inline and run Apex tests without leaving the extension.</p>
+<h3 class="tt">Apex Test Runner <span class="tag">v5.1.0</span></h3>
+<ol class="steps">
+  <li>Select <strong>ApexClass</strong>, search for a class.</li>
+  <li>Click <strong>Run Tests</strong> on any row.</li>
+  <li>Per-method pass/fail/skip table renders with timing, stack traces for failures, and coverage %.</li>
+</ol>
+<h3 class="tt">Edit &amp; Save</h3>
+<ol class="steps">
+  <li>Search for an ApexClass or ApexTrigger.</li>
+  <li>Click <strong>Edit</strong> &mdash; source loads into the inline editor.</li>
+  <li>Make changes &rarr; click <strong>Save to Org</strong>. SF Forge PATCHes the body via Tooling API.</li>
+</ol>
+<div class="mock">
+  <div class="orglk"><strong>Active Org:</strong> Full Sandbox</div>
+  <div class="mbody">
+    <div class="mnav"><div class="ng">Build &amp; Inspect</div><div class="ni active">Metadata Studio <span class="npill">Tool</span></div></div>
+    <div class="mc">
+      <div class="mtoolbar"><select class="minput" style="max-width:160px"><option>ApexClass</option></select><input class="minput" style="flex:1" value="UserDays"><div class="mbtn mbtn-p">Search</div></div>
+      <table class="mtbl">
+        <thead><tr><th>Name</th><th>API</th><th>Status</th><th>Modified</th><th>Action</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>UserDaysSinceLoginBatch</td><td>67</td><td><span class="mbadge mb-ok">Active</span></td><td>31m ago</td>
+            <td style="display:flex;gap:3px;flex-wrap:wrap">
+              <div class="mbtn mbtn-s" style="font-size:10px">Setup &#x2197;</div>
+              <div class="mbtn mbtn-s" style="font-size:10px">Download</div>
+              <div class="mbtn mbtn-s" style="font-size:10px">Edit</div>
+              <div class="mbtn mbtn-s" style="font-size:10px">Run Tests</div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="mcard" style="margin-top:10px">
+        <div style="font-size:12px;font-weight:600;margin-bottom:7px;color:var(--text)">Test results: UserDaysSinceLoginBatch</div>
+        <div style="display:flex;gap:14px;font-size:12px;margin-bottom:8px">
+          <span style="color:var(--green)">&#x2713; 3 passed</span><span style="color:var(--red)">&#x2717; 1 failed</span><span style="color:var(--muted)">0 skipped</span><span>Coverage: <strong>84%</strong></span>
+        </div>
+        <table class="mtbl">
+          <thead><tr><th>Method</th><th>Result</th><th>Time</th></tr></thead>
+          <tbody>
+            <tr><td>testBatchExecutes</td><td style="color:var(--green)">Pass</td><td>234ms</td></tr>
+            <tr><td>testUserUpdate</td><td style="color:var(--red)">Fail</td><td style="color:var(--red)">412ms &mdash; Expected 5, got 4</td></tr>
+            <tr><td>testSchedulable</td><td style="color:var(--green)">Pass</td><td>156ms</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- 6. BULK -->
+<div class="section" id="bulk">
+<h2 class="st">6. Bulk Field Creator</h2>
+<p>Create custom fields in bulk via CSV paste or manual grid. Supports Text, Number, Currency, Percent, Date, DateTime, Checkbox, Picklist, TextArea, LongTextArea, Email, Phone, URL, Formula, and Lookup.</p>
+<h3 class="tt">CSV format</h3>
+<pre><code>Object,Label,API Name,Type,Required,Related Object,Relationship Name,Picklist Values,Description
+Account,Customer Tier,Customer_Tier__c,Picklist,false,,,Bronze,Silver,Gold,Loyalty tier
+Contact,Primary Vendor,Primary_Vendor__c,Lookup,false,Account,PrimaryVendor,,Preferred vendor</code></pre>
+<div class="callout tip"><strong>Lookup fields:</strong> Related Object and Relationship Name columns activate automatically when Type = Lookup or MasterDetail.</div>
+<div class="callout tip"><strong>Validate Only</strong> checks all payloads without creating anything in the org. Run this first.</div>
+<div class="mock">
+  <div class="orglk"><strong>Active Org:</strong> Full Sandbox</div>
+  <div class="mbody">
+    <div class="mnav"><div class="ng">Build &amp; Inspect</div><div class="ni active">Bulk Field Creator <span class="npill">Tool</span></div></div>
+    <div class="mc">
+      <div class="mtoolbar"><div class="mbtn mbtn-s">Load Objects</div><select class="minput" style="max-width:180px"><option>Account (Account)</option></select><div class="mbtn mbtn-s">Add Row</div></div>
+      <div style="overflow-x:auto">
+        <table class="mtbl" style="min-width:600px">
+          <thead><tr><th>Object</th><th>Label</th><th>API Name</th><th>Type</th><th>Req</th><th>Related To</th><th>Picklist Vals</th><th></th></tr></thead>
+          <tbody>
+            <tr>
+              <td><input class="minput" value="Account" style="width:70px"></td>
+              <td><input class="minput" value="Customer Tier" style="width:95px"></td>
+              <td><input class="minput" value="Customer_Tier__c" style="width:110px"></td>
+              <td><select class="minput" style="width:75px"><option>Picklist</option></select></td>
+              <td><select class="minput" style="width:45px"><option>No</option></select></td>
+              <td><input class="minput" value="" disabled style="width:70px;opacity:.35"></td>
+              <td><input class="minput" value="Bronze,Silver,Gold" style="width:115px"></td>
+              <td><div class="mbtn mbtn-d">&#x2715;</div></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="mtoolbar" style="margin-top:8px"><div class="mbtn mbtn-s">Validate Only</div><div class="mbtn mbtn-p">Create Fields</div></div>
+      <div style="font-size:11px;color:var(--green);margin-top:7px">&#x2713; Customer_Tier__c created on Account</div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- 7. FLOW -->
+<div class="section" id="flow">
+<h2 class="st">7. Flow Analyzer</h2>
+<p>Browse all org flows with filters, inspect version history, and activate specific versions directly from SF Forge.</p>
+<ol class="steps">
+  <li>Click <strong>Load Flows</strong>.</li>
+  <li>Filter by name, object keyword, or process type.</li>
+  <li>Click <strong>Inspect</strong> on any flow to open the version history panel.</li>
+  <li>Click <strong>Activate</strong> on any non-active version &mdash; SF Forge PATCHes <code>{ Status: "Active" }</code> via Tooling API.</li>
+</ol>
+<div class="callout warn"><strong>Confirmation required:</strong> Activation shows a confirm dialog. This action cannot be undone without activating a different version.</div>
+<div class="mock">
+  <div class="orglk"><strong>Active Org:</strong> Full Sandbox</div>
+  <div class="mbody">
+    <div class="mnav"><div class="ng">Build &amp; Inspect</div><div class="ni active">Flow Analyzer <span class="npill">Tool</span></div></div>
+    <div class="mc">
+      <div class="mcard">
+        <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:5px">Flow: Case_Routing_Flow</div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:10px">AutoLaunchedFlow &nbsp;&middot;&nbsp; Active &nbsp;&middot;&nbsp; Modified 2h ago</div>
+        <div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:6px">Version History</div>
+        <table class="mtbl">
+          <thead><tr><th>Version</th><th>Status</th><th>Modified</th><th>Action</th></tr></thead>
+          <tbody>
+            <tr style="background:rgba(139,92,246,.08)"><td>v4</td><td style="color:var(--green)">&#x25CF; Active</td><td>2h ago</td><td></td></tr>
+            <tr><td>v3</td><td style="color:var(--muted)">Obsolete</td><td>3d ago</td><td><div class="mbtn mbtn-s" style="font-size:10px">Activate</div></td></tr>
+            <tr><td>v2</td><td style="color:var(--muted)">Obsolete</td><td>1w ago</td><td><div class="mbtn mbtn-s" style="font-size:10px">Activate</div></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- 8. LENS -->
+<div class="section" id="lens">
+<h2 class="st">8. LWC Lens</h2>
+<ul>
+  <li><strong>Enable LWC Lens</strong> &mdash; injects a hover overlay on the active Salesforce Lightning tab. Hovering any component shows its tag name, API name, and DOM path. Right-click copies the tag name.</li>
+  <li><strong>Source Peek</strong> &mdash; enter a DeveloperName, SF Forge fetches the bundle and shows all files (JS, HTML, CSS, meta) in tabbed panels via Tooling API.</li>
+</ul>
+<div class="callout tip"><strong>Tip:</strong> Use Source Peek to inspect any LWC — including managed-package components — without needing org access to the component metadata in Setup.</div>
+</div>
+
+<!-- 9. LOGS -->
+<div class="section" id="logs">
+<h2 class="st">9. Debug Logs</h2>
+<ul>
+  <li><strong>Load Recent Logs</strong> &mdash; shows last 50 logs with user, operation, duration, size, and status</li>
+  <li><strong>View</strong> &mdash; fetches the full log body with color-coded severity lines</li>
+  <li><strong>Severity filter</strong> &mdash; All / Errors only / Warnings+ / Debug+ / Flow+ / SOQL/DML only</li>
+  <li><strong>Copy Exception Summary</strong> &mdash; extracts up to 80 error/exception lines to clipboard</li>
+  <li><strong>Download</strong> &mdash; saves the raw log file</li>
+</ul>
+<div class="callout tip"><strong>Workflow:</strong> Set a trace flag in <strong>Trace Flag Manager</strong> &rarr; run your code &rarr; come back here and click <strong>Load Recent Logs</strong>.</div>
+</div>
+
+<!-- 10. TRACE FLAGS -->
+<div class="section" id="traceflags">
+<h2 class="st">10. Trace Flag Manager</h2>
+<p>Create and manage Apex debug trace flags without leaving SF Forge.</p>
+<ol class="steps">
+  <li>Find the User ID in Inspector: <code>SELECT Id, Name FROM User WHERE Name = 'Your Name'</code></li>
+  <li>Go to Trace Flag Manager &rarr; paste the User Id into <strong>Traced Entity</strong>.</li>
+  <li>Set expiration minutes and log levels for each channel.</li>
+  <li>Click <strong>Create Trace Flag</strong>. SF Forge creates a <code>DebugLevel</code> then the <code>TraceFlag</code>.</li>
+  <li>Run your code &rarr; go to Debug Logs &rarr; Load Recent Logs.</li>
+</ol>
+<div class="mock">
+  <div class="orglk"><strong>Active Org:</strong> Full Sandbox</div>
+  <div class="mbody">
+    <div class="mnav"><div class="ng">Operate &amp; Secure</div><div class="ni active">Trace Flag Manager <span class="npill">Tool</span></div></div>
+    <div class="mc">
+      <div class="mtoolbar"><div class="mbtn mbtn-s">Load Active Flags</div></div>
+      <table class="mtbl">
+        <thead><tr><th>Entity</th><th>Type</th><th>Apex Level</th><th>Expires</th><th></th></tr></thead>
+        <tbody>
+          <tr><td>Jon Murphey</td><td>USER_DEBUG</td><td>DEBUG</td><td>in 58 min</td><td><div class="mbtn mbtn-d" style="font-size:10px">Delete</div></td></tr>
+          <tr style="opacity:.5"><td>Concrete IO User</td><td>USER_DEBUG</td><td>FINEST</td><td style="color:var(--red)">expired</td><td><div class="mbtn mbtn-d" style="font-size:10px">Delete</div></td></tr>
+        </tbody>
+      </table>
+      <div style="font-size:13px;font-weight:600;color:var(--text);margin:14px 0 8px">New Trace Flag</div>
+      <div class="mtoolbar">
+        <input class="minput" style="flex:1" value="005Hs000002GjMNIA0" placeholder="User or Class ID">
+        <input class="minput" type="number" value="60" style="max-width:65px">
+      </div>
+      <div class="mtoolbar">
+        <select class="minput" style="max-width:95px"><option>DEBUG</option></select>
+        <select class="minput" style="max-width:95px"><option>NONE</option></select>
+        <select class="minput" style="max-width:95px"><option>DEBUG</option></select>
+        <select class="minput" style="max-width:95px"><option>INFO</option></select>
+      </div>
+      <div class="mtoolbar"><div class="mbtn mbtn-p">Create Trace Flag</div></div>
+      <div style="color:var(--green);font-size:11px;margin-top:6px">&#x2713; Trace flag created &mdash; logs will appear in Debug Logs.</div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- 11. PERMISSIONS -->
+<div class="section" id="permissions">
+<h2 class="st">11. Permission Inspector</h2>
+<ul>
+  <li>Enter comma-separated Profile/Permission Set names and an Object API name</li>
+  <li><strong>Compare Object Access</strong> &mdash; Read/Create/Edit/Delete/ViewAll/ModifyAll per profile side-by-side</li>
+  <li><strong>Compare FLS</strong> &mdash; Read/Edit per field for all matched permission sets, rendered as a matrix grid</li>
+  <li>Export to CSV for audit trail</li>
+</ul>
+</div>
+
+<!-- 12. ORG DIFF -->
+<div class="section" id="orgdiff">
+<h2 class="st">12. Org Diff</h2>
+<p>Compare metadata between the active org and any stored org profile.</p>
+<ul>
+  <li><strong>Run Diff</strong> &mdash; compares ApexClass, CustomObject, FlowDefinitionView, or PermissionSet by name. Shows presence in each org and which side has newer modifications.</li>
+  <li><strong>Field-level Diff</strong> &mdash; enter an object API name to diff its field arrays between the two orgs. Shows added, removed, and type/length-changed fields.</li>
+</ul>
+<div class="callout tip"><strong>Requirement:</strong> Both orgs must be in the Stored Org Vault (Connect Org page).</div>
+</div>
+
+<!-- 13. DEPLOY -->
+<div class="section" id="deploy">
+<h2 class="st">13. Deployment Assistant</h2>
+<p>Generate <code>package.xml</code> and <code>destructiveChanges.xml</code> for use with Salesforce CLI or Metadata API. SF Forge does <strong>not</strong> deploy directly.</p>
+<pre><code>sf project deploy start --manifest package.xml --target-org YourOrgAlias</code></pre>
+</div>
+
+<!-- 14. REST -->
+<div class="section" id="rest">
+<h2 class="st">14. REST Explorer</h2>
+<p>Raw API request builder. Select GET/POST/PATCH/DELETE, enter a path (e.g. <code>/limits</code> or <code>/sobjects/Account/describe</code>), add a JSON body for POST/PATCH, press <strong>Send</strong> or <code>Ctrl+Enter</code>. Download the response as JSON.</p>
+</div>
+
+<!-- 15. LIMITS -->
+<div class="section" id="limits">
+<h2 class="st">15. API Limits Dashboard</h2>
+<p>Live progress bars for all org API limits, colour-coded at 70% (amber) and 90% (red) thresholds. Auto-refreshes every 60 seconds. Includes 10-point sparklines showing recent trend per limit.</p>
+<div class="mock">
+  <div class="orglk"><strong>Active Org:</strong> Full Sandbox</div>
+  <div class="mbody">
+    <div class="mnav"><div class="ng">Operate &amp; Secure</div><div class="ni active">API Limits <span class="npill">Tool</span></div></div>
+    <div class="mc">
+      <div class="mtoolbar"><div class="mbtn mbtn-p">Refresh Now</div><div class="mbtn mbtn-s">Export CSV</div><span style="font-size:11px;color:var(--muted)">Auto-refreshes every 60s</span></div>
+      <div style="margin-top:12px">
+        <div class="lrow"><span class="llbl">DailyApiRequests</span><div class="lbar-w"><div class="lbar" style="width:23%;background:var(--green)"></div></div><span class="lpct" style="color:var(--green)">23%</span></div>
+        <div class="lrow"><span class="llbl">DataStorageMB</span><div class="lbar-w"><div class="lbar" style="width:74%;background:var(--amber)"></div></div><span class="lpct" style="color:var(--amber)">74%</span></div>
+        <div class="lrow"><span class="llbl">FileStorageMB</span><div class="lbar-w"><div class="lbar" style="width:92%;background:var(--red)"></div></div><span class="lpct" style="color:var(--red)">92%</span></div>
+        <div class="lrow"><span class="llbl">HourlyTimeBasedWorkflow</span><div class="lbar-w"><div class="lbar" style="width:11%;background:var(--green)"></div></div><span class="lpct" style="color:var(--green)">11%</span></div>
+        <div class="lrow"><span class="llbl">DailyBulkApiRequests</span><div class="lbar-w"><div class="lbar" style="width:5%;background:var(--green)"></div></div><span class="lpct" style="color:var(--green)">5%</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- 16. JOBS -->
+<div class="section" id="jobs">
+<h2 class="st">16. Apex Job Monitor</h2>
+<p>Monitor queued, running, and recent <code>AsyncApexJob</code> (batch, future, queueable, scheduled) and <code>CronTrigger</code> scheduled jobs. Auto-refreshes every 30 seconds.</p>
+<ul>
+  <li>Filter by job type and status</li>
+  <li><strong>Abort</strong> &mdash; available for Queued, Processing, and Holding jobs</li>
+  <li><strong>Delete</strong> &mdash; removes scheduled CronTrigger jobs</li>
+  <li>Export to CSV for reporting</li>
+</ul>
+</div>
+
+<!-- 17. SECURITY -->
+<div class="section" id="security">
+<h2 class="st">17. Security Health Scan</h2>
+<p>One-click read-only audit across 7 checks. Nothing is changed in the org. Export results to CSV for your audit trail.</p>
+<div class="mock">
+  <div class="orglk"><strong>Active Org:</strong> Full Sandbox</div>
+  <div class="mbody">
+    <div class="mnav"><div class="ng">Operate &amp; Secure</div><div class="ni active">Security Health Scan <span class="npill">Tool</span></div></div>
+    <div class="mc">
+      <div class="mtoolbar"><div class="mbtn mbtn-p">Run Security Scan</div><div class="mbtn mbtn-s">Export Report</div></div>
+      <div style="display:flex;gap:14px;font-size:12px;margin:10px 0">
+        <span style="color:var(--green)">&#x2713; 4 passed</span><span style="color:var(--amber)">&#x26A0; 2 warnings</span><span style="color:var(--red)">&#x2717; 1 failed</span>
+      </div>
+      <div class="scheck pass"><div class="sch"><span style="color:var(--green)">&#x2713;</span> Guest User Accounts <span style="font-size:10px;margin-left:auto;color:var(--green)">PASS</span></div><div class="scd">No guest users detected.</div></div>
+      <div class="scheck warn"><div class="sch"><span style="color:var(--amber)">&#x26A0;</span> View All Data Profiles <span style="font-size:10px;margin-left:auto;color:var(--amber)">WARN</span></div><div class="scd">3 profiles have View All Data. &rarr; Use permission sets instead where possible.</div></div>
+      <div class="scheck fail"><div class="sch"><span style="color:var(--red)">&#x2717;</span> Permission Sets &mdash; Modify All Data <span style="font-size:10px;margin-left:auto;color:var(--red)">FAIL</span></div><div class="scd">2 permission sets grant Modify All Data: Data_Loader_Access, Integration_Admin. &rarr; Revoke &mdash; assign only to System Administrator profile.</div></div>
+      <div class="scheck pass"><div class="sch"><span style="color:var(--green)">&#x2713;</span> Password Policy <span style="font-size:10px;margin-left:auto;color:var(--green)">PASS</span></div><div class="scd">Policy meets basic security requirements.</div></div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- 18. UPDATES -->
+<div class="section" id="updates">
+<h2 class="st">18. Auto-Update Setup</h2>
+<p>SF Forge checks your GitHub repo for new releases every 6 hours and on every Chrome startup.</p>
+<h3 class="tt">One-time configuration</h3>
+<ol class="steps">
+  <li>Open SF Forge &rarr; <strong>Theme Engine</strong> &rarr; scroll to <strong>Update Settings</strong>.</li>
+  <li>Enter your GitHub <strong>Owner</strong> (username or org) and <strong>Repository Name</strong>.</li>
+  <li>Click <strong>Save &amp; Check Now</strong>.</li>
+</ol>
+<h3 class="tt">Publishing a release</h3>
+<ol class="steps">
+  <li>Bump <code>"version"</code> in <code>manifest.json</code> and update <code>CHANGELOG.md</code>.</li>
+  <li>Zip: <code>zip -r sf-forge-vX.Y.Z.zip sf-forge/ -x "*.git*"</code></li>
+  <li>Create a GitHub Release tagged <code>vX.Y.Z</code>, attach the <code>.zip</code> as a release asset.</li>
+  <li>SF Forge detects the update within 6 hours and shows the download banner.</li>
+</ol>
+<h3 class="tt">Applying an update</h3>
+<ol class="steps">
+  <li>Click <strong>Download update</strong> in the banner &mdash; Chrome downloads the zip.</li>
+  <li>Unzip and replace the sf-forge folder contents.</li>
+  <li>Go to <code>chrome://extensions</code> &rarr; click <strong>&#x21BB;</strong> on SF Forge.</li>
+</ol>
+<div class="callout warn"><strong>Do not remove the extension</strong> during updates. Removing and re-adding creates a new extension ID and loses all stored org profiles and settings.</div>
+</div>
+
+<footer>
+  SF Forge v5.1.1 &nbsp;&middot;&nbsp; Jon-Michael Murphey &nbsp;&middot;&nbsp; Trusted Tech Team &nbsp;&middot;&nbsp; Dark Fenrir Forge<br>
+  <span style="font-size:11px">Internal tool &mdash; not for public distribution</span>
+</footer>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,16 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SF Forge</title><link rel="stylesheet" href="app.css"></head><body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand"><img src="../../assets/brand/dark-fenrir-forge-logo.png" alt="Dark Fenrir Forge"><div><h1>SF Forge</h1><p>Dark Fenrir Forge</p></div></div>
+    <nav id="nav"></nav>
+    <div class="character"><img src="../../assets/brand/founder-character.png" alt="Forge guide"><span>Software smithed & built to endure.</span></div>
+  </aside>
+  <main class="main">
+    <header class="topbar"><div><h2 id="pageTitle">Dashboard</h2><p id="pageHelp">Connect to the active Salesforce org using your current browser session.</p></div><div class="actions"><span id="orgBadge" class="badge warn">Not connected</span><button id="connectBtn" title="Detect your active Salesforce tab and session cookie">Connect Org</button></div></header>
+    <div id="updateBanner" role="alert" aria-live="polite"><span class="update-icon" aria-hidden="true">&#x2B06;</span><div class="update-msg"><span id="updateBannerText"><b>SF Forge update available</b></span><div class="update-notes" id="updateBannerNotes"></div></div><div class="banner-actions"><button id="updateDownloadBtn">Download update</button><button class="secondary" id="updateReleaseBtn">View release</button><span class="update-progress" id="updateProgress" style="display:none">Downloading…</span></div><button class="btn-dismiss" id="updateDismissBtn" title="Dismiss until next update" aria-label="Dismiss update banner">&#x00D7;</button></div>
+    <section id="view"></section>
+  </main>
+</div>
+<div id="toast" role="status"></div>
+<script type="module" src="app.js"></script>
+</body></html>
