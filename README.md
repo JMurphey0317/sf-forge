@@ -12,7 +12,7 @@
 
 ---
 
-SF Forge is a Chrome extension built for Salesforce developers and administrators at **Trusted Tech Team**. It provides 18 integrated tools — from SOQL query execution and Apex test running to org security scanning and flow version management — all operating against a single active org target without leaving the browser.
+SF Forge is a Chrome extension built for Salesforce developers and administrators. It provides 18 integrated tools — from SOQL query execution and Apex test running to org security scanning and flow version management — all operating against a single active org target without leaving the browser.
 
 ---
 
