@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SF Forge",
-  "version": "7.0.0",
+  "version": "7.3.0",
   "description": "Dark Fenrir Forge Salesforce productivity toolkit \u2014 v7.0.0 \u2014 Data Loader, Automation Health, User & License Audit, Who Broke It, Field Usage Analyzer, Sandbox Tracker.",
   "author": "Dark Fenrir Forge",
   "content_security_policy": {
