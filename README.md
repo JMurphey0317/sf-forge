@@ -1,7 +1,7 @@
-# SF Forge v6.0.0
+# SF Forge v7.0.0
 
 
-## v6.0.0 — New Modules
+## v7.0.0 — New Modules
 
 ### ⇄ Permission Lens
 Inspired by SF PermLens — a full permission management suite built directly into SF Forge:
@@ -44,7 +44,7 @@ Dark Fenrir Forge — Salesforce productivity toolkit for Chrome.
 
 ### API / Reliability
 9. **Session auto-refresh alarm** — Chrome alarm fires every 90 minutes to validate stored sessions; marks stale ones as `needsRefresh` so the next connect silently re-authenticates.
-10. **API version bumped to v66.0** — `DEFAULT_API_VERSION` updated across all modules. Connect Org vault cards show and allow editing the per-org API version.
+10. **API version bumped to v76.0** — `DEFAULT_API_VERSION` updated across all modules. Connect Org vault cards show and allow editing the per-org API version.
 11. **Rate-limit retry** — `bridgeFetch` and `directSalesforceFetch` retry on HTTP 429/503 with exponential back-off (1s, 2s, 4s, up to 3 retries).
 
 ### New Features
