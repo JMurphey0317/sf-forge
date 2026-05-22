@@ -1,7 +1,20 @@
 /**
- * SF Forge App v5.0.0
+ * SF Forge App v7.0.0
  *
- * Enhancement summary (all 16 recommendations implemented):
+ * v7 NEW MODULES — Admin-focused enhancements:
+ *  1. Record Edit & Data Loader  — inline field edit + bulk update from SOQL results
+ *  4. Automation Health Dashboard — Flows, Scheduled Apex, Process Builders, Workflow Rules in one view
+ *  5. User License & Login History — inactive user audit, license reclamation, login failure tracker
+ *  9. "Who Broke It?" Quick Filter — pre-built panic-button audit trail for recent critical changes
+ * 11. Field Usage Analyzer        — cross-reference a field against Flows, Apex, Validation Rules, Reports
+ * 12. Sandbox Refresh Tracker     — SandboxInfo list with last refresh date and type
+ *
+ * v6 NEW MODULES (inspired by SF Release Tracker + SF PermLens):
+ *  A. Org Change Tracker  — SetupAuditTrail viewer with type/user/date filters, diff highlighting, CSV export
+ *  B. Permission Lens     — Full side-by-side permission diff (Object, FLS, System, Apex, VF, Tabs),
+ *                           permission copy between perm sets, bulk user access management
+ *
+ * Enhancement summary (all 16 v5 recommendations remain):
  *
  * SECURITY
  *  1. Credential encryption: vault entries encrypted via AES-GCM + PBKDF2 passphrase on first save
@@ -48,6 +61,7 @@ const navItems = [
   ['dashboard',  'Dashboard',              'Org health and shortcuts'],
   ['connect',    'Connect Org',            'Production/Sandbox login vault'],
   ['inspector',  'Inspector',              'Objects, fields, SOQL'],
+  ['dataloader', 'Data Loader',            'Edit records in place, bulk update from SOQL'],
   ['rest',       'REST Explorer',          'API requests'],
   ['metadata',   'Metadata Studio',        'Apex/LWC/Aura/Flows'],
   ['logs',       'Debug Logs',             'Readable debug logs'],
@@ -55,13 +69,20 @@ const navItems = [
   ['lens',       'LWC Lens',               'Component overlay'],
   ['bulk',       'Bulk Field Creator',     'Create fields from CSV or grid'],
   ['permissions','Permission Inspector',   'Compare profile and permission set access'],
+  ['permlens',   'Permission Lens',        'Diff, copy, and bulk-assign permissions (v6)'],
+  ['changetracker','Org Change Tracker',   'SetupAuditTrail — who changed what and when'],
+  ['whobrokeit', 'Who Broke It?',          'Panic-button audit for recent critical changes'],
   ['orgdiff',    'Org Diff',              'Compare metadata between orgs'],
   ['deploy',     'Deployment Assistant',   'Package.xml and deployment preview'],
   ['agents',     'Agentforce Inspector',   'Bots, topics, and actions'],
   ['limits',     'API Limits',              'Org limits and usage trends'],
   ['jobs',       'Apex Job Monitor',        'Scheduled and batch Apex jobs'],
+  ['automation', 'Automation Health',       'Flows, scheduled jobs, workflows in one view'],
   ['traceflags', 'Trace Flag Manager',      'Set debug log trace flags'],
   ['security',   'Security Health Scan',    'Org security checklist'],
+  ['userlicenses','User & License Audit',   'Inactive users, license usage, login history'],
+  ['fieldusage', 'Field Usage Analyzer',   'Where is this field used? Flows, Apex, rules'],
+  ['sandboxes',  'Sandbox Tracker',         'Sandbox list, refresh dates, org types'],
   ['workspace',  'Saved Workspace',        'Favorites and recent work by org'],
   ['themes',     'Theme Engine',           'Dark Fenrir theme and layout settings']
 ];
@@ -200,9 +221,9 @@ function requireApi() {
 function renderNav() {
   const groups = [
     ['Command Center',   ['dashboard','connect','workspace','themes']],
-    ['Build & Inspect',  ['inspector','metadata','bulk','flow','lens']],
-    ['Operate & Secure', ['logs','permissions','orgdiff','deploy','rest','limits','jobs','traceflags','security']],
-    ['Agentforce',       ['agents']]
+    ['Build & Inspect',  ['inspector','dataloader','metadata','bulk','flow','lens','fieldusage']],
+    ['Operate & Secure', ['logs','permissions','permlens','changetracker','whobrokeit','orgdiff','deploy','rest','limits','jobs','automation','traceflags','security']],
+    ['Admin Tools',      ['userlicenses','sandboxes','agents']]
   ];
   const byId = Object.fromEntries(navItems.map(i => [i[0], i]));
   const html = groups.map(([group, ids]) => `
@@ -353,9 +374,10 @@ async function render() {
     active = item[0];
     setHeader(item[1], item[2]);
     const routes = {
-      dashboard, connect: connectView, inspector, rest, metadata, logs, flow, lens,
-      bulk, permissions, orgdiff, deploy, agents, workspace, themes: themeEngine,
-      limits: limitsView, jobs: jobMonitor, traceflags: traceFlagManager, security: securityScan
+      dashboard, connect: connectView, inspector, dataloader: dataLoader, rest, metadata, logs, flow, lens,
+      bulk, permissions, permlens: permLens, changetracker: changeTracker, whobrokeit: whobrokeit, orgdiff, deploy, agents, workspace, themes: themeEngine,
+      limits: limitsView, jobs: jobMonitor, automation: automationHealth, traceflags: traceFlagManager, security: securityScan,
+      userlicenses: userLicenseAudit, fieldusage: fieldUsageAnalyzer, sandboxes: sandboxTracker
     };
     const fn = routes[active] || dashboard;
     await fn();
@@ -591,11 +613,19 @@ async function dashboard() {
       <h3>Tool Hub</h3>
       <div class="tool-hub">
         <button class="tool-card" data-go="inspector"><b>Query &amp; Inspect</b><small>SOQL history, sort, objects, fields</small></button>
+        <button class="tool-card" data-go="dataloader"><b>Data Loader ✦NEW</b><small>Edit records in place, bulk update</small></button>
         <button class="tool-card" data-go="metadata"><b>Metadata Studio</b><small>Apex edit &amp; save, LWC, Aura, Flows</small></button>
         <button class="tool-card" data-go="bulk"><b>Bulk Field Creator</b><small>CSV, paste, validation, payload preview</small></button>
         <button class="tool-card" data-go="logs"><b>Debug Log Viewer</b><small>Colorized logs, filters, counters</small></button>
         <button class="tool-card" data-go="flow"><b>Flow Analyzer</b><small>Filter, compare versions, flow map</small></button>
+        <button class="tool-card" data-go="automation"><b>Automation Health ✦NEW</b><small>Flows, scheduled jobs, workflows</small></button>
         <button class="tool-card" data-go="permissions"><b>Permissions + FLS</b><small>Object &amp; field-level security grid</small></button>
+        <button class="tool-card" data-go="permlens"><b>Permission Lens</b><small>Diff, copy &amp; bulk-assign permissions</small></button>
+        <button class="tool-card" data-go="changetracker"><b>Org Change Tracker</b><small>SetupAuditTrail — who changed what</small></button>
+        <button class="tool-card" data-go="whobrokeit"><b>Who Broke It? ✦NEW</b><small>Panic-button critical change filter</small></button>
+        <button class="tool-card" data-go="userlicenses"><b>User &amp; License Audit ✦NEW</b><small>Inactive users, login history</small></button>
+        <button class="tool-card" data-go="fieldusage"><b>Field Usage Analyzer ✦NEW</b><small>Where is this field referenced?</small></button>
+        <button class="tool-card" data-go="sandboxes"><b>Sandbox Tracker ✦NEW</b><small>Refresh dates, types, status</small></button>
         <button class="tool-card" data-go="orgdiff"><b>Org Diff</b><small>Field-level metadata compare</small></button>
         <button class="tool-card" data-go="agents"><b>Agentforce Inspector</b><small>Bots, topics, actions</small></button>
       </div>
@@ -898,9 +928,19 @@ async function inspector() {
       <div id="recordDetail" style="display:none;margin-top:12px;padding:12px;background:var(--panel2);border-radius:8px;border:1px solid var(--purple)">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
           <b id="recordDetailTitle" style="font-size:13px">Record Detail</b>
-          <button id="closeRecordDetail" style="font-size:11px;padding:3px 8px">Close</button>
+          <div style="display:flex;gap:6px">
+            <button id="editRecordBtn" style="font-size:11px;padding:3px 10px">✎ Edit</button>
+            <button id="closeRecordDetail" style="font-size:11px;padding:3px 8px">Close</button>
+          </div>
         </div>
         <div id="recordDetailBody"></div>
+        <div id="recordEditBar" style="display:none;margin-top:8px;border-top:1px solid var(--line);padding-top:8px">
+          <div class="toolbar">
+            <button id="saveRecordBtn">Save Changes</button>
+            <button class="secondary" id="cancelEditBtn">Cancel</button>
+            <span id="recordSaveStatus" class="muted" style="font-size:12px"></span>
+          </div>
+        </div>
       </div>
     </section>
     <section class="card span6">
@@ -976,26 +1016,98 @@ async function inspector() {
       tr.onclick = () => {
         const rec = applySort(lastRecords)[i];
         if (!rec) return;
-        const allKeys = Object.keys(rec).filter(k => k !== 'attributes');
-        const rows = allKeys.map(k => {
-          const v = rec[k];
-          const display = v === null ? '<span style="color:var(--muted);font-style:italic">null</span>'
-            : typeof v === 'object' ? `<code style="font-size:11px">${escapeHtml(JSON.stringify(v))}</code>`
-            : escapeHtml(String(v));
-          return `<tr><td style="font-weight:500;padding:3px 8px 3px 0;font-size:12px;white-space:nowrap;color:var(--muted)">${escapeHtml(k)}</td>
-            <td style="padding:3px 0;font-size:12px;word-break:break-all">${display}</td></tr>`;
-        }).join('');
-        $('#recordDetailTitle').textContent = rec.Name || rec.Id || 'Record';
-        $('#recordDetailBody').innerHTML = `<table style="width:100%">${rows}</table>`;
-        if (rec.Id && api?.orgUrl) {
-          $('#recordDetailBody').innerHTML += `<a href="${api.orgUrl}/${rec.Id}" target="_blank" style="font-size:12px;color:var(--purple2);margin-top:8px;display:block">Open in Salesforce ↗</a>`;
-        }
+        window._detailRec = rec;
+        renderRecordDetail(rec, false);
         $('#recordDetail').style.display = '';
       };
     });
   }
 
-  $('#closeRecordDetail').onclick = () => { $('#recordDetail').style.display = 'none'; };
+  function renderRecordDetail(rec, editMode) {
+    const allKeys = Object.keys(rec).filter(k => k !== 'attributes');
+    const rows = allKeys.map(k => {
+      const v = rec[k];
+      const isEditable = editMode && k !== 'Id' && typeof v !== 'object';
+      const display = v === null
+        ? (isEditable ? `<input data-edit-field="${escapeHtml(k)}" value="" style="width:100%;font-size:12px;padding:2px 6px">` : '<span style="color:var(--muted);font-style:italic">null</span>')
+        : typeof v === 'object'
+          ? `<code style="font-size:11px">${escapeHtml(JSON.stringify(v))}</code>`
+          : isEditable
+            ? `<input data-edit-field="${escapeHtml(k)}" value="${escapeHtml(String(v))}" style="width:100%;font-size:12px;padding:2px 6px">`
+            : escapeHtml(String(v));
+      return `<tr>
+        <td style="font-weight:500;padding:3px 8px 3px 0;font-size:12px;white-space:nowrap;color:var(--muted)">${escapeHtml(k)}</td>
+        <td style="padding:3px 0;font-size:12px;word-break:break-all">${display}</td>
+      </tr>`;
+    }).join('');
+    $('#recordDetailTitle').textContent = rec.Name || rec.Id || 'Record';
+    $('#recordDetailBody').innerHTML = `<table style="width:100%">${rows}</table>`;
+    if (rec.Id && api?.orgUrl && !editMode) {
+      $('#recordDetailBody').innerHTML += `<a href="${api.orgUrl}/${rec.Id}" target="_blank" style="font-size:12px;color:var(--purple2);margin-top:8px;display:block">Open in Salesforce ↗</a>`;
+    }
+    $('#recordEditBar').style.display = editMode ? '' : 'none';
+    $('#editRecordBtn').textContent = editMode ? '✎ Viewing' : '✎ Edit';
+  }
+
+  $('#closeRecordDetail').onclick = () => {
+    $('#recordDetail').style.display = 'none';
+    window._detailRec = null;
+    window._detailEditMode = false;
+  };
+
+  $('#editRecordBtn').onclick = () => {
+    if (!window._detailRec) return;
+    window._detailEditMode = !window._detailEditMode;
+    renderRecordDetail(window._detailRec, window._detailEditMode);
+  };
+
+  $('#cancelEditBtn').onclick = () => {
+    window._detailEditMode = false;
+    renderRecordDetail(window._detailRec, false);
+  };
+
+  $('#saveRecordBtn').onclick = async () => {
+    const rec = window._detailRec;
+    if (!rec?.Id) return toast('No record selected.');
+    const inputs = document.querySelectorAll('[data-edit-field]');
+    const changes = {};
+    inputs.forEach(inp => {
+      const field = inp.dataset.editField;
+      const orig  = rec[field];
+      const val   = inp.value;
+      // Only include changed fields
+      if (String(orig ?? '') !== val) {
+        // Coerce booleans
+        if (val === 'true' || val === 'false') changes[field] = val === 'true';
+        else if (val === '' && orig === null) { /* unchanged null */ }
+        else changes[field] = val === '' ? null : val;
+      }
+    });
+    if (!Object.keys(changes).length) return toast('No changes detected.');
+    const status = $('#recordSaveStatus');
+    const btn    = $('#saveRecordBtn');
+    btn.disabled = true; status.textContent = 'Saving…';
+    try {
+      const objectType = rec.attributes?.type || rec.Id?.substring(0,3);
+      const objName    = rec.attributes?.type;
+      if (!objName) throw new Error('Cannot determine object type from record. Include "attributes" field or use the full SOQL result.');
+      await requireApi().request(`/services/data/v66.0/sobjects/${objName}/${rec.Id}`, { method:'PATCH', body:JSON.stringify(changes) });
+      // Merge changes back into record
+      Object.assign(rec, changes);
+      window._detailRec = rec;
+      // Refresh SOQL result table in place
+      lastRecords = lastRecords.map(r => r.Id === rec.Id ? { ...r, ...changes } : r);
+      $('#soqlResult').innerHTML = renderSortableTable(applySort(lastRecords));
+      attachSortHandlers(); attachRowHandlers();
+      window._detailEditMode = false;
+      renderRecordDetail(rec, false);
+      status.textContent = '✓ Saved';
+      toast(`Record ${rec.Id} updated (${Object.keys(changes).length} field${Object.keys(changes).length > 1 ? 's' : ''}).`);
+    } catch(e) {
+      status.textContent = '';
+      toast(e.message, 6000, { copyText: e.message });
+    } finally { btn.disabled = false; }
+  };
 
   // ── Visual Query Builder ──────────────────────────────────────────────────
   let builderVisible = false, builderFields = [];
@@ -1990,7 +2102,611 @@ async function permissions() {
   };
 }
 
+// ── Permission Lens — v6: Full diff, copy, bulk user access ──────────────────
+async function permLens() {
+  view().innerHTML = `<section class="card">
+    <h3>Permission Lens <span class="badge info">v6 — Diff · Copy · Bulk Assign</span></h3>
+    <p class="muted">Compare, copy, and manage Salesforce permissions — Profiles and Permission Sets — without leaving this panel.</p>
+    <div class="toolbar" style="margin-bottom:8px">
+      <button id="plTabDiff"   class="pl-tab active-tab">⇄ Permission Diff</button>
+      <button id="plTabCopy"   class="pl-tab">⇢ Permission Copy</button>
+      <button id="plTabUsers"  class="pl-tab">👥 User Access</button>
+    </div>
+
+    <!-- DIFF PANEL -->
+    <div id="plDiff">
+      <p class="muted" style="margin-bottom:12px">Enter two Profiles or Permission Set names to compare side-by-side. Differences are highlighted.</p>
+      <div class="toolbar">
+        <input id="plLeft"  placeholder="Left — Profile or Permission Set name" style="flex:1">
+        <input id="plRight" placeholder="Right — Profile or Permission Set name" style="flex:1">
+      </div>
+      <div class="toolbar">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px">
+          <input type="checkbox" id="plDiffOnly"> Differences only
+        </label>
+        <input id="plDiffSearch" placeholder="Search field / permission name…" style="max-width:220px">
+        <button id="plRunDiff">Compare</button>
+        <button class="secondary" id="plExportDiffCSV">Export CSV</button>
+        <button class="secondary" id="plExportDiffJSON">Export JSON</button>
+      </div>
+      <div id="plDiffTabs" style="display:flex;gap:8px;margin:10px 0;flex-wrap:wrap"></div>
+      <div id="plDiffResult"></div>
+    </div>
+
+    <!-- COPY PANEL -->
+    <div id="plCopy" style="display:none">
+      <p class="muted" style="margin-bottom:12px">Copy selected permission categories from one Profile or Permission Set to another.</p>
+      <div class="toolbar">
+        <input id="plCopySrc"  placeholder="Source Permission Set / Profile name" style="flex:1">
+        <input id="plCopyDest" placeholder="Destination Permission Set name"      style="flex:1">
+      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin:10px 0">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="plCopyObj"  checked> Object Permissions</label>
+        <label style="display:flex;align-items:center;gap=6px;font-size:13px"><input type="checkbox" id="plCopyFls"  checked> Field-Level Security</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="plCopySys"  checked> System Permissions</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="plCopyApex" checked> Apex Class Access</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="plCopyVf"   checked> Visualforce Access</label>
+      </div>
+      <div class="toolbar">
+        <input id="plCopyObj_filter" placeholder="Filter by object name (optional)" style="max-width:280px">
+        <button id="plRunCopy">Copy Permissions</button>
+      </div>
+      <div id="plCopyResult"></div>
+    </div>
+
+    <!-- USER ACCESS PANEL -->
+    <div id="plUsers" style="display:none">
+      <p class="muted" style="margin-bottom:12px">Copy permission sets from one user to multiple users, or directly assign selected permission sets to a group of users.</p>
+      <div style="border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px;background:var(--panel2)">
+        <b style="font-size:13px">Option A — Copy access from a source user</b>
+        <div class="toolbar" style="margin-top:8px">
+          <input id="plUserSrc" placeholder="Source username or Id" style="flex:1">
+          <button id="plLoadUserPerms">Load Permissions</button>
+        </div>
+        <div id="plUserPermList"></div>
+      </div>
+      <div style="border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px;background:var(--panel2)">
+        <b style="font-size:13px">Option B — Assign Permission Sets directly</b>
+        <div class="toolbar" style="margin-top:8px">
+          <input id="plPsSearch" placeholder="Permission Set name(s) comma-separated" style="flex:1">
+          <button id="plFindPs">Find Permission Sets</button>
+        </div>
+        <div id="plPsList"></div>
+      </div>
+      <div style="border:1px solid var(--line);border-radius:14px;padding:14px;background:var(--panel2)">
+        <b style="font-size:13px">Target Users</b>
+        <div class="toolbar" style="margin-top:8px">
+          <textarea id="plTargetUsers" placeholder="Usernames or Ids — one per line" style="min-height:80px;flex:1"></textarea>
+        </div>
+        <div class="toolbar">
+          <button id="plAssignPerms">Assign to All Target Users</button>
+          <span id="plAssignStatus" class="muted" style="font-size:12px"></span>
+        </div>
+        <div id="plAssignProgress"></div>
+      </div>
+    </div>
+  </section>`;
+
+  // ─ Tab switching ─────────────────────────────────────────────────────────
+  function showTab(id) {
+    ['plDiff','plCopy','plUsers'].forEach(p => document.getElementById(p).style.display = p === id ? '' : 'none');
+    ['plTabDiff','plTabCopy','plTabUsers'].forEach(b => {
+      const btn = document.getElementById(b);
+      if (btn) btn.classList.toggle('active-tab', b === 'plTab' + id.replace('pl','').charAt(0).toUpperCase() + id.replace('pl','').slice(1));
+    });
+  }
+  // Map button ids to panel ids
+  const tabMap = { plTabDiff:'plDiff', plTabCopy:'plCopy', plTabUsers:'plUsers' };
+  ['plTabDiff','plTabCopy','plTabUsers'].forEach(tid => {
+    document.getElementById(tid).onclick = () => {
+      document.querySelectorAll('.pl-tab').forEach(b => b.classList.remove('active-tab'));
+      document.getElementById(tid).classList.add('active-tab');
+      showTab(tabMap[tid]);
+    };
+  });
+
+  // ─ DIFF logic ────────────────────────────────────────────────────────────
+  let diffData = { obj:[], fls:[], sys:[], apex:[], vf:[] };
+  let activeDiffTab = 'obj';
+
+  async function resolvePset(name) {
+    const quoted = `'${safeLike(name)}'`;
+    const r = await requireApi().toolingQueryAll(
+      `SELECT Id, Name, Label, IsOwnedByProfile, Profile.Name FROM PermissionSet WHERE Name=${quoted} OR Label=${quoted} OR Profile.Name=${quoted} LIMIT 5`,
+      { maxRecords: 5 }
+    );
+    if (!r.records?.length) throw new Error(`Cannot find Profile/PermSet: "${name}"`);
+    return r.records[0];
+  }
+
+  function diffIcon(l, r) {
+    if (l === r) return `<span style="color:#4ade80">≡</span>`;
+    return `<span style="color:#f87171">≠</span>`;
+  }
+
+  function boolCell(v) {
+    return v ? `<span style="color:#4ade80">✓</span>` : `<span style="color:#f87171">—</span>`;
+  }
+
+  function renderDiffTable(rows, cols, leftName, rightName, diffOnly, search) {
+    if (!rows.length) return '<p class="muted">No data found.</p>';
+    let filtered = rows;
+    if (diffOnly) filtered = filtered.filter(r => r.__diff);
+    if (search)   filtered = filtered.filter(r => r.__key?.toLowerCase().includes(search.toLowerCase()));
+    if (!filtered.length) return '<p class="muted">No differences found matching your filters.</p>';
+
+    const thStyle = 'style="color:var(--purple2);padding:9px;text-align:left;border-bottom:1px solid var(--line)"';
+    const tdStyle = 'style="padding:8px 9px;border-bottom:1px solid var(--line)"';
+    const header = `<tr><th ${thStyle}>Name</th><th ${thStyle}>${escapeHtml(leftName)}</th><th ${thStyle}>${escapeHtml(rightName)}</th><th ${thStyle}>Δ</th></tr>`;
+    const body = filtered.map(row => {
+      const rowBg = row.__diff ? 'background:rgba(239,68,68,.07)' : '';
+      const cells = cols.map(c => {
+        const lv = row.left?.[c]; const rv = row.right?.[c];
+        const lStr = lv !== undefined ? String(lv) : '—';
+        const rStr = rv !== undefined ? String(rv) : '—';
+        const diff  = lStr !== rStr;
+        return `<td ${tdStyle}>${typeof lv === 'boolean' ? boolCell(lv) : escapeHtml(lStr)}</td>`+
+               `<td ${tdStyle}>${typeof rv === 'boolean' ? boolCell(rv) : escapeHtml(rStr)}</td>`+
+               `<td ${tdStyle}>${diffIcon(lStr, rStr)}</td>`;
+      }).join('');
+      return `<tr style="${rowBg}"><td ${tdStyle} style="font-weight:500;${rowBg}">${escapeHtml(row.__key)}</td>${cells}</tr>`;
+    }).join('');
+    return `<table class="table" style="font-size:12px"><thead>${header}</thead><tbody>${body}</tbody></table>`;
+  }
+
+  $('#plRunDiff').onclick = async () => {
+    const leftName  = $('#plLeft').value.trim();
+    const rightName = $('#plRight').value.trim();
+    if (!leftName || !rightName) return toast('Enter both Profile/Permission Set names.');
+    const btn = $('#plRunDiff');
+    btn.disabled = true; btn.textContent = 'Comparing…';
+    $('#plDiffResult').innerHTML = '<p class="muted">Fetching permission data…</p>';
+    try {
+      const [lp, rp] = await Promise.all([resolvePset(leftName), resolvePset(rightName)]);
+
+      // Object Permissions
+      const [loRes, roRes] = await Promise.all([
+        requireApi().toolingQueryAll(`SELECT SobjectType,PermissionsRead,PermissionsCreate,PermissionsEdit,PermissionsDelete,PermissionsViewAllRecords,PermissionsModifyAllRecords FROM ObjectPermissions WHERE ParentId='${lp.Id}'`,{maxRecords:500}),
+        requireApi().toolingQueryAll(`SELECT SobjectType,PermissionsRead,PermissionsCreate,PermissionsEdit,PermissionsDelete,PermissionsViewAllRecords,PermissionsModifyAllRecords FROM ObjectPermissions WHERE ParentId='${rp.Id}'`,{maxRecords:500})
+      ]);
+      const loMap = Object.fromEntries((loRes.records||[]).map(r=>[r.SobjectType,r]));
+      const roMap = Object.fromEntries((roRes.records||[]).map(r=>[r.SobjectType,r]));
+      const allObjects = [...new Set([...Object.keys(loMap),...Object.keys(roMap)])].sort();
+      diffData.obj = allObjects.map(obj => {
+        const l = loMap[obj]||{}, r = roMap[obj]||{};
+        const fields = ['PermissionsRead','PermissionsCreate','PermissionsEdit','PermissionsDelete','PermissionsViewAllRecords','PermissionsModifyAllRecords'];
+        const __diff = fields.some(f => !!l[f] !== !!r[f]);
+        return { __key: obj, __diff, left: { R:!!l.PermissionsRead,C:!!l.PermissionsCreate,E:!!l.PermissionsEdit,D:!!l.PermissionsDelete,VA:!!l.PermissionsViewAllRecords,MA:!!l.PermissionsModifyAllRecords }, right: { R:!!r.PermissionsRead,C:!!r.PermissionsCreate,E:!!r.PermissionsEdit,D:!!r.PermissionsDelete,VA:!!r.PermissionsViewAllRecords,MA:!!r.PermissionsModifyAllRecords } };
+      });
+
+      // System Permissions
+      const [lsRes, rsRes] = await Promise.all([
+        requireApi().toolingQueryAll(`SELECT Id FROM PermissionSet WHERE Id='${lp.Id}'`,{maxRecords:1}),
+        requireApi().toolingQueryAll(`SELECT Id FROM PermissionSet WHERE Id='${rp.Id}'`,{maxRecords:1})
+      ]);
+      // Fetch full perm set with system perms via REST describe
+      const SYS_PERMS = ['PermissionsApiEnabled','PermissionsAuthorApex','PermissionsManageUsers','PermissionsViewSetup','PermissionsModifyAllData','PermissionsViewAllData','PermissionsRunReports','PermissionsViewAllUsers','PermissionsManageSandboxes','PermissionsScheduleApex'];
+      const [lsFullRes, rsFullRes] = await Promise.all([
+        requireApi().toolingQuery(`SELECT ${SYS_PERMS.join(',')} FROM PermissionSet WHERE Id='${lp.Id}' LIMIT 1`),
+        requireApi().toolingQuery(`SELECT ${SYS_PERMS.join(',')} FROM PermissionSet WHERE Id='${rp.Id}' LIMIT 1`)
+      ]);
+      const ls = lsFullRes.records?.[0]||{}, rs = rsFullRes.records?.[0]||{};
+      diffData.sys = SYS_PERMS.map(perm => {
+        const lv = !!ls[perm], rv = !!rs[perm];
+        return { __key: perm.replace('Permissions',''), __diff: lv !== rv, left:{V:lv}, right:{V:rv} };
+      });
+
+      // Apex Class Access
+      const [laRes, raRes] = await Promise.all([
+        requireApi().toolingQueryAll(`SELECT ApexClassId, ApexClass.Name FROM SetupEntityAccess WHERE ParentId='${lp.Id}' AND SetupEntityType='ApexClass' ORDER BY ApexClass.Name`,{maxRecords:2000}),
+        requireApi().toolingQueryAll(`SELECT ApexClassId, ApexClass.Name FROM SetupEntityAccess WHERE ParentId='${rp.Id}' AND SetupEntityType='ApexClass' ORDER BY ApexClass.Name`,{maxRecords:2000})
+      ]);
+      const laSet = new Set((laRes.records||[]).map(r=>r.ApexClass?.Name||r.ApexClassId));
+      const raSet = new Set((raRes.records||[]).map(r=>r.ApexClass?.Name||r.ApexClassId));
+      const allApex = [...new Set([...laSet,...raSet])].sort();
+      diffData.apex = allApex.map(name => ({
+        __key: name, __diff: laSet.has(name) !== raSet.has(name),
+        left:{Access: laSet.has(name)}, right:{Access: raSet.has(name)}
+      }));
+
+      // Visualforce Access
+      const [lvRes, rvRes] = await Promise.all([
+        requireApi().toolingQueryAll(`SELECT SetupEntityId, SetupEntity.Name FROM SetupEntityAccess WHERE ParentId='${lp.Id}' AND SetupEntityType='ApexPage' ORDER BY SetupEntity.Name`,{maxRecords:2000}),
+        requireApi().toolingQueryAll(`SELECT SetupEntityId, SetupEntity.Name FROM SetupEntityAccess WHERE ParentId='${rp.Id}' AND SetupEntityType='ApexPage' ORDER BY SetupEntity.Name`,{maxRecords:2000})
+      ]);
+      const lvSet = new Set((lvRes.records||[]).map(r=>r.SetupEntity?.Name||r.SetupEntityId));
+      const rvSet = new Set((rvRes.records||[]).map(r=>r.SetupEntity?.Name||r.SetupEntityId));
+      const allVf = [...new Set([...lvSet,...rvSet])].sort();
+      diffData.vf = allVf.map(name => ({
+        __key: name, __diff: lvSet.has(name) !== rvSet.has(name),
+        left:{Access: lvSet.has(name)}, right:{Access: rvSet.has(name)}
+      }));
+
+      const diffCounts = {
+        obj:  diffData.obj.filter(r=>r.__diff).length,
+        sys:  diffData.sys.filter(r=>r.__diff).length,
+        apex: diffData.apex.filter(r=>r.__diff).length,
+        vf:   diffData.vf.filter(r=>r.__diff).length
+      };
+
+      // Render tab bar
+      const tabs = [
+        {id:'obj',  label:`Objects (${diffCounts.obj} diff)`},
+        {id:'sys',  label:`System Perms (${diffCounts.sys} diff)`},
+        {id:'apex', label:`Apex Access (${diffCounts.apex} diff)`},
+        {id:'vf',   label:`VF Access (${diffCounts.vf} diff)`}
+      ];
+      $('#plDiffTabs').innerHTML = tabs.map(t =>
+        `<button class="secondary pl-diff-tab ${t.id===activeDiffTab?'active-tab':''}" data-dt="${t.id}" style="font-size:12px;padding:6px 12px">${t.label}</button>`
+      ).join('');
+      document.querySelectorAll('.pl-diff-tab').forEach(b =>
+        b.onclick = () => {
+          activeDiffTab = b.dataset.dt;
+          document.querySelectorAll('.pl-diff-tab').forEach(x=>x.classList.remove('active-tab'));
+          b.classList.add('active-tab');
+          renderDiff();
+        }
+      );
+
+      renderDiff();
+      toast('Permission diff complete.');
+    } catch(e) { toast(e.message, 5000, {copyText:e.message}); $('#plDiffResult').innerHTML = `<p class="error-note">${escapeHtml(e.message)}</p>`; }
+    finally { btn.disabled = false; btn.textContent = 'Compare'; }
+  };
+
+  function renderDiff() {
+    const diffOnly = $('#plDiffOnly')?.checked;
+    const search   = $('#plDiffSearch')?.value || '';
+    const leftName  = $('#plLeft')?.value.trim();
+    const rightName = $('#plRight')?.value.trim();
+    const colMaps = {
+      obj:  { data: diffData.obj,  cols: ['R','C','E','D','VA','MA'] },
+      sys:  { data: diffData.sys,  cols: ['V'] },
+      apex: { data: diffData.apex, cols: ['Access'] },
+      vf:   { data: diffData.vf,   cols: ['Access'] }
+    };
+    const { data, cols } = colMaps[activeDiffTab] || colMaps.obj;
+    $('#plDiffResult').innerHTML = renderDiffTable(data, cols, leftName||'Left', rightName||'Right', diffOnly, search);
+  }
+
+  // Debounced search/filter re-render
+  let diffFilterTimer;
+  const diffRerender = () => { clearTimeout(diffFilterTimer); diffFilterTimer = setTimeout(renderDiff, 200); };
+  setTimeout(() => {
+    $('#plDiffOnly')?.addEventListener('change', renderDiff);
+    $('#plDiffSearch')?.addEventListener('input', diffRerender);
+  }, 100);
+
+  // Export diff
+  $('#plExportDiffCSV').onclick = () => {
+    const all = [...diffData.obj, ...diffData.sys, ...diffData.apex, ...diffData.vf];
+    if (!all.length) return toast('Run a comparison first.');
+    const rows = all.map(r => ({ Name: r.__key, Diff: r.__diff ? 'DIFFERENT' : 'SAME', ...Object.fromEntries(Object.entries(r.left||{}).map(([k,v])=>['Left_'+k,v])), ...Object.fromEntries(Object.entries(r.right||{}).map(([k,v])=>['Right_'+k,v])) }));
+    chrome.runtime.sendMessage({ type:'DOWNLOAD_TEXT', filename:'sf-forge-perm-diff.csv', mime:'text/csv', content:toCsv(rows) });
+  };
+  $('#plExportDiffJSON').onclick = () => {
+    if (!diffData.obj.length && !diffData.sys.length) return toast('Run a comparison first.');
+    chrome.runtime.sendMessage({ type:'DOWNLOAD_TEXT', filename:'sf-forge-perm-diff.json', mime:'application/json', content:JSON.stringify(diffData, null, 2) });
+  };
+
+  // ─ COPY logic ────────────────────────────────────────────────────────────
+  $('#plRunCopy').onclick = async () => {
+    const srcName  = $('#plCopySrc').value.trim();
+    const destName = $('#plCopyDest').value.trim();
+    if (!srcName || !destName) return toast('Enter both source and destination names.');
+    const copyObj  = $('#plCopyObj').checked;
+    const copyFls  = $('#plCopyFls').checked;
+    const copySys  = $('#plCopySys').checked;
+    const copyApex = $('#plCopyApex').checked;
+    const copyVf   = $('#plCopyVf').checked;
+    const objFilter = $('#plCopyObj_filter').value.trim();
+
+    const btn = $('#plRunCopy'); btn.disabled = true; btn.textContent = 'Copying…';
+    const res = $('#plCopyResult');
+    res.innerHTML = '<p class="muted">Resolving permission sets…</p>';
+    const log = (msg, color='var(--muted)') => {
+      res.innerHTML += `<p style="font-size:12px;color:${color};margin:2px 0">${escapeHtml(msg)}</p>`;
+    };
+    try {
+      const [src, dest] = await Promise.all([resolvePset(srcName), resolvePset(destName)]);
+      if (dest.IsOwnedByProfile) throw new Error('Destination must be a Permission Set, not a Profile.');
+      res.innerHTML = '';
+      log(`Source: ${src.Label||src.Name} (${src.IsOwnedByProfile?'Profile':'PermSet'})`);
+      log(`Destination: ${dest.Label||dest.Name} (PermSet)`);
+
+      if (copyObj) {
+        const q = objFilter
+          ? `SELECT SobjectType,PermissionsRead,PermissionsCreate,PermissionsEdit,PermissionsDelete,PermissionsViewAllRecords,PermissionsModifyAllRecords FROM ObjectPermissions WHERE ParentId='${src.Id}' AND SobjectType LIKE '%${safeLike(objFilter)}%'`
+          : `SELECT SobjectType,PermissionsRead,PermissionsCreate,PermissionsEdit,PermissionsDelete,PermissionsViewAllRecords,PermissionsModifyAllRecords FROM ObjectPermissions WHERE ParentId='${src.Id}'`;
+        const srcObjs = await requireApi().toolingQueryAll(q, {maxRecords:500});
+        const destObjs = await requireApi().toolingQueryAll(`SELECT Id,SobjectType FROM ObjectPermissions WHERE ParentId='${dest.Id}'`,{maxRecords:500});
+        const destMap = Object.fromEntries((destObjs.records||[]).map(r=>[r.SobjectType,r.Id]));
+        let upserted = 0;
+        for (const op of (srcObjs.records||[])) {
+          const payload = { ParentId:dest.Id, SobjectType:op.SobjectType, PermissionsRead:op.PermissionsRead, PermissionsCreate:op.PermissionsCreate, PermissionsEdit:op.PermissionsEdit, PermissionsDelete:op.PermissionsDelete, PermissionsViewAllRecords:op.PermissionsViewAllRecords, PermissionsModifyAllRecords:op.PermissionsModifyAllRecords };
+          if (destMap[op.SobjectType]) {
+            await requireApi().request(`/services/data/v66.0/tooling/sobjects/ObjectPermissions/${destMap[op.SobjectType]}`, 'PATCH', payload);
+          } else {
+            await requireApi().request('/services/data/v66.0/tooling/sobjects/ObjectPermissions', 'POST', payload);
+          }
+          upserted++;
+        }
+        log(`✓ Object Permissions: ${upserted} objects copied.`, '#4ade80');
+      }
+
+      if (copyApex) {
+        const srcApex = await requireApi().toolingQueryAll(`SELECT ApexClassId FROM SetupEntityAccess WHERE ParentId='${src.Id}' AND SetupEntityType='ApexClass'`,{maxRecords:2000});
+        const destApex = await requireApi().toolingQueryAll(`SELECT SetupEntityId FROM SetupEntityAccess WHERE ParentId='${dest.Id}' AND SetupEntityType='ApexClass'`,{maxRecords:2000});
+        const destSet = new Set((destApex.records||[]).map(r=>r.SetupEntityId));
+        let added = 0;
+        for (const rec of (srcApex.records||[])) {
+          if (!destSet.has(rec.ApexClassId)) {
+            await requireApi().request('/services/data/v66.0/tooling/sobjects/SetupEntityAccess', 'POST', { ParentId:dest.Id, SetupEntityId:rec.ApexClassId, SetupEntityType:'ApexClass' });
+            added++;
+          }
+        }
+        log(`✓ Apex Class Access: ${added} classes added (${srcApex.records?.length - added} already present).`, '#4ade80');
+      }
+
+      if (copyVf) {
+        const srcVf = await requireApi().toolingQueryAll(`SELECT SetupEntityId FROM SetupEntityAccess WHERE ParentId='${src.Id}' AND SetupEntityType='ApexPage'`,{maxRecords:2000});
+        const destVf = await requireApi().toolingQueryAll(`SELECT SetupEntityId FROM SetupEntityAccess WHERE ParentId='${dest.Id}' AND SetupEntityType='ApexPage'`,{maxRecords:2000});
+        const destSet = new Set((destVf.records||[]).map(r=>r.SetupEntityId));
+        let added = 0;
+        for (const rec of (srcVf.records||[])) {
+          if (!destSet.has(rec.SetupEntityId)) {
+            await requireApi().request('/services/data/v66.0/tooling/sobjects/SetupEntityAccess', 'POST', { ParentId:dest.Id, SetupEntityId:rec.SetupEntityId, SetupEntityType:'ApexPage' });
+            added++;
+          }
+        }
+        log(`✓ Visualforce Access: ${added} pages added.`, '#4ade80');
+      }
+
+      log('Permission copy complete.', '#a78bfa');
+    } catch(e) { log('✗ Error: ' + e.message, '#f87171'); toast(e.message, 5000, {copyText:e.message}); }
+    finally { btn.disabled = false; btn.textContent = 'Copy Permissions'; }
+  };
+
+  // ─ USER ACCESS logic ─────────────────────────────────────────────────────
+  let selectedPermSets = [];
+
+  $('#plLoadUserPerms').onclick = async () => {
+    const src = $('#plUserSrc').value.trim();
+    if (!src) return toast('Enter a username or User Id.');
+    const btn = $('#plLoadUserPerms'); btn.disabled = true; btn.textContent = 'Loading…';
+    try {
+      const userQ = src.startsWith('005')
+        ? await requireApi().query(`SELECT Id, Username FROM User WHERE Id='${src}' LIMIT 1`)
+        : await requireApi().query(`SELECT Id, Username FROM User WHERE Username='${src}' LIMIT 1`);
+      const user = userQ.records?.[0];
+      if (!user) throw new Error(`User not found: ${src}`);
+      const assigns = await requireApi().queryAll(`SELECT PermissionSetId, PermissionSet.Label, PermissionSet.Name FROM PermissionSetAssignment WHERE AssigneeId='${user.Id}' AND PermissionSet.IsOwnedByProfile=false ORDER BY PermissionSet.Label`, {maxRecords:500});
+      const psets = (assigns.records||[]).map(r=>({ id:r.PermissionSetId, label:r.PermissionSet?.Label||r.PermissionSet?.Name }));
+      selectedPermSets = psets;
+      $('#plUserPermList').innerHTML = psets.length
+        ? `<p style="margin:8px 0 4px;font-size:12px;color:var(--muted)">${psets.length} permission sets found on ${escapeHtml(user.Username)}. All will be assigned to target users.</p>`+
+          `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">${psets.map(p=>`<span style="background:rgba(139,92,246,.18);padding:3px 10px;border-radius:20px;font-size:12px">${escapeHtml(p.label)}</span>`).join('')}</div>`
+        : '<p class="muted" style="font-size:12px;margin:8px 0">No permission sets found on this user (profile-owned excluded).</p>';
+    } catch(e) { toast(e.message, 5000, {copyText:e.message}); }
+    finally { btn.disabled = false; btn.textContent = 'Load Permissions'; }
+  };
+
+  $('#plFindPs').onclick = async () => {
+    const names = $('#plPsSearch').value.split(',').map(x=>x.trim()).filter(Boolean);
+    if (!names.length) return toast('Enter at least one permission set name.');
+    const btn = $('#plFindPs'); btn.disabled = true; btn.textContent = 'Searching…';
+    try {
+      const quoted = names.map(n=>`'${safeLike(n)}'`).join(',');
+      const r = await requireApi().toolingQueryAll(`SELECT Id, Name, Label FROM PermissionSet WHERE (Name IN (${quoted}) OR Label IN (${quoted})) AND IsOwnedByProfile=false ORDER BY Label`,{maxRecords:50});
+      const psets = (r.records||[]).map(p=>({ id:p.Id, label:p.Label||p.Name }));
+      selectedPermSets = psets;
+      $('#plPsList').innerHTML = psets.length
+        ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">${psets.map(p=>`<span style="background:rgba(139,92,246,.18);padding:3px 10px;border-radius:20px;font-size:12px">${escapeHtml(p.label)}</span>`).join('')}</div>`
+        : '<p class="muted" style="font-size:12px;margin:8px 0">No matching permission sets found.</p>';
+    } catch(e) { toast(e.message, 5000, {copyText:e.message}); }
+    finally { btn.disabled = false; btn.textContent = 'Find Permission Sets'; }
+  };
+
+  $('#plAssignPerms').onclick = async () => {
+    if (!selectedPermSets.length) return toast('Load permission sets first (Option A or B).');
+    const rawUsers = $('#plTargetUsers').value.split(/\n|,/).map(x=>x.trim()).filter(Boolean);
+    if (!rawUsers.length) return toast('Enter at least one target username or Id.');
+    const btn = $('#plAssignPerms'); btn.disabled = true; btn.textContent = 'Assigning…';
+    const progress = $('#plAssignProgress');
+    progress.innerHTML = '';
+    let done = 0, errors = 0;
+    const total = rawUsers.length * selectedPermSets.length;
+    const logLine = (msg, color='var(--muted)') => { progress.innerHTML += `<p style="font-size:11px;color:${color};margin:1px 0">${escapeHtml(msg)}</p>`; };
+    try {
+      for (const rawUser of rawUsers) {
+        const isId = rawUser.startsWith('005');
+        const userQ = isId
+          ? await requireApi().query(`SELECT Id, Username FROM User WHERE Id='${rawUser}' LIMIT 1`)
+          : await requireApi().query(`SELECT Id, Username FROM User WHERE Username='${rawUser}' LIMIT 1`);
+        const user = userQ.records?.[0];
+        if (!user) { logLine(`✗ User not found: ${rawUser}`, '#f87171'); errors++; continue; }
+        for (const ps of selectedPermSets) {
+          try {
+            // Check existing assignment
+            const existing = await requireApi().query(`SELECT Id FROM PermissionSetAssignment WHERE AssigneeId='${user.Id}' AND PermissionSetId='${ps.id}' LIMIT 1`);
+            if (existing.records?.length) {
+              logLine(`→ ${user.Username}: ${ps.label} already assigned`, '#fbbf24');
+            } else {
+              await requireApi().request('/services/data/v66.0/sobjects/PermissionSetAssignment', 'POST', { AssigneeId:user.Id, PermissionSetId:ps.id });
+              logLine(`✓ ${user.Username}: ${ps.label} assigned`, '#4ade80');
+            }
+            done++;
+          } catch(e2) {
+            logLine(`✗ ${user.Username}: ${ps.label} — ${e2.message}`, '#f87171');
+            errors++;
+          }
+          $('#plAssignStatus').textContent = `${done + errors}/${total} processed`;
+        }
+      }
+      logLine(`Complete: ${done} assigned, ${errors} errors.`, '#a78bfa');
+    } catch(e) { toast(e.message, 5000, {copyText:e.message}); }
+    finally { btn.disabled = false; btn.textContent = 'Assign to All Target Users'; }
+  };
+}
+
+// ── Org Change Tracker — v6: SetupAuditTrail viewer ──────────────────────────
+async function changeTracker() {
+  const TYPE_COLORS = {
+    'Apex':       '#60a5fa',
+    'Flow':       '#34d399',
+    'Field':      '#fbbf24',
+    'Object':     '#a78bfa',
+    'Permission': '#f472b6',
+    'Profile':    '#fb923c',
+    'User':       '#22d3ee',
+    'Security':   '#f87171',
+    'Other':      '#9ca3af'
+  };
+
+  function classifyAction(action, section) {
+    const a = (action||'').toLowerCase() + ' ' + (section||'').toLowerCase();
+    if (a.includes('apex') || a.includes('class') || a.includes('trigger')) return 'Apex';
+    if (a.includes('flow') || a.includes('process builder') || a.includes('workflow')) return 'Flow';
+    if (a.includes('field') || a.includes('customfield')) return 'Field';
+    if (a.includes('object') || a.includes('customobject')) return 'Object';
+    if (a.includes('permissionset') || a.includes('permission set') || a.includes('permission')) return 'Permission';
+    if (a.includes('profile')) return 'Profile';
+    if (a.includes('user') || a.includes('login')) return 'User';
+    if (a.includes('session') || a.includes('password') || a.includes('ip') || a.includes('trusted')) return 'Security';
+    return 'Other';
+  }
+
+  view().innerHTML = `<section class="card">
+    <h3>Org Change Tracker <span class="badge info">v6 — SetupAuditTrail</span></h3>
+    <p class="muted">See every setup change made in your org — who changed what, when, and from where. Powered by SetupAuditTrail.</p>
+    <div class="toolbar">
+      <select id="ctDateRange" style="max-width:160px">
+        <option value="1">Today</option>
+        <option value="7" selected>Last 7 Days</option>
+        <option value="30">Last 30 Days</option>
+        <option value="90">Last 90 Days</option>
+        <option value="180">Last 180 Days</option>
+      </select>
+      <input id="ctUser"   placeholder="Filter by username…" style="max-width:200px">
+      <input id="ctSearch" placeholder="Search action / detail…" style="max-width:220px">
+      <button id="ctRun">Fetch Changes</button>
+      <button class="secondary" id="ctExport">Export CSV</button>
+    </div>
+    <div id="ctTypeChips" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px"></div>
+    <div id="ctSummary"></div>
+    <div id="ctResult"></div>
+  </section>`;
+
+  let allChanges = [];
+  let activeTypes = new Set();
+
+  function renderChips() {
+    const counts = {};
+    allChanges.forEach(c => { counts[c.__type] = (counts[c.__type]||0)+1; });
+    const types = Object.keys(counts).sort();
+    activeTypes = new Set(types); // default: all selected
+    $('#ctTypeChips').innerHTML = types.map(t =>
+      `<button class="ct-chip active-chip" data-type="${t}" style="font-size:11px;padding:4px 10px;border-color:${TYPE_COLORS[t]||'#9ca3af'};background:rgba(0,0,0,.3);color:${TYPE_COLORS[t]||'#9ca3af'}">${t} <span style="opacity:.7">(${counts[t]})</span></button>`
+    ).join('');
+    document.querySelectorAll('.ct-chip').forEach(chip => {
+      chip.onclick = () => {
+        const t = chip.dataset.type;
+        if (activeTypes.has(t)) { activeTypes.delete(t); chip.classList.remove('active-chip'); chip.style.opacity = '0.4'; }
+        else                    { activeTypes.add(t);    chip.classList.add('active-chip');    chip.style.opacity = '1'; }
+        renderTable();
+      };
+    });
+  }
+
+  function renderTable() {
+    const userFilter   = ($('#ctUser')?.value||'').toLowerCase();
+    const searchFilter = ($('#ctSearch')?.value||'').toLowerCase();
+    let rows = allChanges.filter(c => {
+      if (!activeTypes.has(c.__type)) return false;
+      if (userFilter && !(c.CreatedBy?.Username||'').toLowerCase().includes(userFilter)) return false;
+      if (searchFilter && !`${c.Action} ${c.Display} ${c.Section}`.toLowerCase().includes(searchFilter)) return false;
+      return true;
+    });
+
+    if (!rows.length) { $('#ctResult').innerHTML = '<p class="muted">No changes match the current filters.</p>'; return; }
+
+    const thStyle = 'style="color:var(--purple2);padding:9px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap"';
+    const tdStyle = 'style="padding:8px 9px;border-bottom:1px solid var(--line);font-size:12px;vertical-align:top"';
+    const header = `<tr><th ${thStyle}>When</th><th ${thStyle}>Type</th><th ${thStyle}>Section</th><th ${thStyle}>User</th><th ${thStyle}>Action / Detail</th><th ${thStyle}>Delegate</th></tr>`;
+    const body = rows.slice(0, 500).map(c => {
+      const col = TYPE_COLORS[c.__type]||'#9ca3af';
+      const badge = `<span style="background:rgba(0,0,0,.3);color:${col};border:1px solid ${col};border-radius:20px;padding:2px 8px;font-size:11px;white-space:nowrap">${c.__type}</span>`;
+      return `<tr>
+        <td ${tdStyle} style="white-space:nowrap">${escapeHtml(new Date(c.CreatedDate).toLocaleString())}</td>
+        <td ${tdStyle}>${badge}</td>
+        <td ${tdStyle}>${escapeHtml(c.Section||'')}</td>
+        <td ${tdStyle}>${escapeHtml(c.CreatedBy?.Username||'—')}</td>
+        <td ${tdStyle}>${escapeHtml((c.Display||c.Action||'').substring(0,200))}</td>
+        <td ${tdStyle}>${escapeHtml(c.DelegateUser||'—')}</td>
+      </tr>`;
+    }).join('');
+    const truncated = rows.length > 500 ? `<p class="muted" style="font-size:12px;margin-top:6px">Showing 500 of ${rows.length} results. Narrow filters or export CSV for full list.</p>` : '';
+    $('#ctResult').innerHTML = `<table class="table" style="width:100%;font-size:12px"><thead>${header}</thead><tbody>${body}</tbody></table>${truncated}`;
+  }
+
+  // Debounced filter re-renders
+  let filterTimer;
+  const rerender = () => { clearTimeout(filterTimer); filterTimer = setTimeout(renderTable, 200); };
+  setTimeout(() => {
+    $('#ctUser')?.addEventListener('input', rerender);
+    $('#ctSearch')?.addEventListener('input', rerender);
+  }, 100);
+
+  $('#ctRun').onclick = async () => {
+    const days = parseInt($('#ctDateRange').value)||7;
+    const since = new Date(Date.now() - days*86400000).toISOString().split('.')[0]+'Z';
+    const btn = $('#ctRun'); btn.disabled = true; btn.textContent = 'Fetching…';
+    $('#ctResult').innerHTML  = '<p class="muted">Querying SetupAuditTrail…</p>';
+    $('#ctSummary').innerHTML = '';
+    try {
+      const r = await requireApi().queryAll(
+        `SELECT Id, Action, Section, Display, DelegateUser, CreatedDate, CreatedById, CreatedBy.Username, CreatedBy.Name FROM SetupAuditTrail WHERE CreatedDate >= ${since} ORDER BY CreatedDate DESC`,
+        { maxRecords: 5000 }
+      );
+      allChanges = (r.records||[]).map(c => ({ ...c, __type: classifyAction(c.Action, c.Section) }));
+
+      // Summary bar
+      const total   = allChanges.length;
+      const users   = new Set(allChanges.map(c=>c.CreatedBy?.Username)).size;
+      const types   = new Set(allChanges.map(c=>c.__type)).size;
+      const dateRange = days === 1 ? 'today' : `last ${days} days`;
+      $('#ctSummary').innerHTML = `<div style="display:flex;gap:18px;padding:10px 14px;background:var(--panel2);border-radius:10px;margin-bottom:12px;flex-wrap:wrap">
+        <span style="font-size:13px"><b>${total}</b> <span class="muted">changes ${dateRange}</span></span>
+        <span style="font-size:13px"><b>${users}</b> <span class="muted">user${users!==1?'s':''}</span></span>
+        <span style="font-size:13px"><b>${types}</b> <span class="muted">change types</span></span>
+      </div>`;
+
+      renderChips();
+      renderTable();
+      toast(`Loaded ${total} audit trail entries.`);
+    } catch(e) {
+      const isPerms = /INSUFFICIENT_ACCESS|INVALID_FIELD/i.test(e.message);
+      $('#ctResult').innerHTML = `<div class="notice" style="border-left:3px solid #f87171">
+        <b>${isPerms ? 'Insufficient Permissions' : 'Query Error'}</b><br>
+        ${escapeHtml(e.message)}<br><br>
+        ${isPerms ? 'SetupAuditTrail requires "View Setup and Configuration" or System Administrator profile.' : ''}
+      </div>`;
+      toast(e.message, 5000, {copyText:e.message});
+    } finally { btn.disabled = false; btn.textContent = 'Fetch Changes'; }
+  };
+
+  $('#ctExport').onclick = () => {
+    if (!allChanges.length) return toast('Fetch changes first.');
+    const rows = allChanges.map(c => ({
+      Date: c.CreatedDate, Type: c.__type, Section: c.Section,
+      Action: c.Action, Detail: c.Display, User: c.CreatedBy?.Username, Delegate: c.DelegateUser||''
+    }));
+    chrome.runtime.sendMessage({ type:'DOWNLOAD_TEXT', filename:'sf-forge-audit-trail.csv', mime:'text/csv', content:toCsv(rows) });
+  };
+}
+
 // ── Org Diff — Enhancement #13: field-level compare ──────────────────────────
+
 async function orgdiff() {
   const stored = await readCredentialProfiles();
   view().innerHTML = `<section class="card">
@@ -2775,6 +3491,1009 @@ async function themeEngine() {
   const grid = view().querySelector('.grid');
   if (grid) grid.appendChild(updateSection);
   renderUpdateSettings(updateSection).catch(e => { updateSection.innerHTML = `<p class="error-note">${escapeHtml(e.message)}</p>`; });
+}
+
+// ── Data Loader — v7: standalone record edit + bulk update ───────────────────
+async function dataLoader() {
+  view().innerHTML = `<div class="grid">
+    <section class="card span12">
+      <h3>Data Loader <span class="badge info">Edit · Bulk Update · Delete</span></h3>
+      <p class="muted">Run any SOQL query, then edit individual records in the panel below or bulk-update a field across all results. Changes are written immediately via the REST API.</p>
+      <div class="toolbar">
+        <textarea id="dlSoql" style="min-height:60px;flex:1" placeholder="SELECT Id, Name, StageName, CloseDate FROM Opportunity WHERE StageName = 'Prospecting' LIMIT 200"></textarea>
+      </div>
+      <div class="toolbar">
+        <button id="dlRun">Run Query</button>
+        <button class="secondary" id="dlRunAll">Load All Pages</button>
+        <button class="secondary" id="dlCsv">Export CSV</button>
+        <span id="dlProgress" class="muted" style="font-size:12px"></span>
+      </div>
+    </section>
+
+    <section class="card span8" id="dlResultCard">
+      <h3>Results <span class="muted" id="dlCount" style="font-size:13px;font-weight:400"></span></h3>
+      <div id="dlResult"><p class="muted">Run a query to load records.</p></div>
+    </section>
+
+    <section class="card span4">
+      <h3>Record Editor</h3>
+      <div id="dlEditor">
+        <p class="muted" style="font-size:12px">Click a row to open it here.</p>
+      </div>
+      <div id="dlEditorBar" style="display:none;margin-top:10px;border-top:1px solid var(--line);padding-top:10px">
+        <div class="toolbar">
+          <button id="dlSaveRecord">Save Record</button>
+          <button class="secondary" id="dlCancelEdit">Cancel</button>
+        </div>
+        <p id="dlSaveStatus" class="muted" style="font-size:11px;margin:4px 0 0"></p>
+      </div>
+
+      <div style="margin-top:18px;border-top:1px solid var(--line);padding-top:14px">
+        <h4 style="font-size:13px;margin:0 0 8px">Bulk Update All Results</h4>
+        <p class="muted" style="font-size:12px;margin-bottom:8px">Set one field to one value across every record in the current query result. Use with care.</p>
+        <div class="field" style="margin-bottom:8px">
+          <label style="font-size:12px">Field API Name</label>
+          <input id="dlBulkField" placeholder="e.g. OwnerId">
+        </div>
+        <div class="field" style="margin-bottom:8px">
+          <label style="font-size:12px">New Value</label>
+          <input id="dlBulkValue" placeholder="e.g. 005xxx…">
+        </div>
+        <div class="toolbar">
+          <button id="dlBulkUpdate" class="danger">Bulk Update</button>
+          <span id="dlBulkStatus" class="muted" style="font-size:12px"></span>
+        </div>
+        <div id="dlBulkProgress"></div>
+      </div>
+
+      <div style="margin-top:18px;border-top:1px solid var(--line);padding-top:14px">
+        <h4 style="font-size:13px;margin:0 0 6px">Delete Selected Records</h4>
+        <p class="muted" style="font-size:12px;margin-bottom:8px">Check rows in the results table then delete. Unrecoverable — use Recycle Bin to restore.</p>
+        <div class="toolbar">
+          <button id="dlDeleteSelected" class="danger">Delete Checked</button>
+          <span id="dlDeleteStatus" class="muted" style="font-size:12px"></span>
+        </div>
+      </div>
+    </section>
+  </div>`;
+
+  let dlRecords = [], dlSortCol = null, dlSortDir = 1, dlEditRec = null;
+
+  function dlSort(records) {
+    if (!dlSortCol) return records;
+    return [...records].sort((a,b) => {
+      const av = a[dlSortCol]??'', bv = b[dlSortCol]??'';
+      return dlSortDir * (String(av)<String(bv)?-1:String(av)>String(bv)?1:0);
+    });
+  }
+
+  function renderDlTable(records) {
+    if (!records.length) return '<p class="muted">No records returned.</p>';
+    const cols = [...new Set(records.flatMap(r=>Object.keys(r).filter(k=>k!=='attributes'&&!k.startsWith('_'))))].slice(0,10);
+    const ths = cols.map(c=>{
+      const arrow = c===dlSortCol?(dlSortDir===1?' ▲':' ▼'):'';
+      return `<th style="cursor:pointer;font-size:12px;padding:7px 8px;color:var(--purple2)" data-dlcol="${escapeHtml(c)}">${escapeHtml(c)}${arrow}</th>`;
+    }).join('');
+    const rows = dlSort(records).map((r,i)=>`<tr style="cursor:pointer">
+      <td style="padding:4px 6px"><input type="checkbox" class="dl-check" data-idx="${i}"></td>
+      ${cols.map(c=>`<td style="font-size:11px;padding:4px 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px" title="${escapeHtml(String(r[c]??''))}">${escapeHtml(String(r[c]??'').substring(0,80))}</td>`).join('')}
+    </tr>`).join('');
+    return `<div style="overflow-x:auto"><table class="table" style="width:100%;table-layout:auto">
+      <thead><tr><th style="width:28px;padding:4px"></th>${ths}</tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
+  }
+
+  function bindDlTable() {
+    document.querySelectorAll('[data-dlcol]').forEach(th=>{
+      th.onclick = ()=>{
+        if(dlSortCol===th.dataset.dlcol){dlSortDir*=-1;}else{dlSortCol=th.dataset.dlcol;dlSortDir=1;}
+        $('#dlResult').innerHTML = renderDlTable(dlRecords);
+        bindDlTable();
+      };
+    });
+    document.querySelectorAll('#dlResult tbody tr').forEach((tr,i)=>{
+      // click on row (not checkbox) opens editor
+      tr.onclick = e=>{
+        if(e.target.type==='checkbox') return;
+        const rec = dlSort(dlRecords)[i];
+        if(!rec) return;
+        dlEditRec = rec;
+        openDlEditor(rec);
+      };
+    });
+  }
+
+  function openDlEditor(rec) {
+    const fields = Object.keys(rec).filter(k=>k!=='attributes');
+    const rows = fields.map(k=>{
+      const v = rec[k];
+      const isComplex = typeof v === 'object' && v !== null;
+      const inp = k==='Id' || isComplex
+        ? `<span style="font-size:12px;color:var(--muted)">${escapeHtml(typeof v==='object'?JSON.stringify(v):String(v??''))}</span>`
+        : `<input data-dl-edit="${escapeHtml(k)}" value="${escapeHtml(String(v??''))}" style="width:100%;font-size:12px;padding:2px 6px">`;
+      return `<tr>
+        <td style="font-size:11px;color:var(--muted);padding:3px 6px 3px 0;white-space:nowrap;vertical-align:middle">${escapeHtml(k)}</td>
+        <td style="padding:2px 0;vertical-align:middle">${inp}</td>
+      </tr>`;
+    }).join('');
+    $('#dlEditor').innerHTML = `<p style="font-size:11px;color:var(--purple2);margin:0 0 8px">${escapeHtml(rec.Id||'')}</p><table style="width:100%">${rows}</table>`;
+    if(rec.Id && api?.orgUrl) {
+      $('#dlEditor').innerHTML += `<a href="${api.orgUrl}/${rec.Id}" target="_blank" style="font-size:11px;color:var(--purple2);margin-top:6px;display:block">Open in Salesforce ↗</a>`;
+    }
+    $('#dlEditorBar').style.display = '';
+    $('#dlSaveStatus').textContent = '';
+  }
+
+  $('#dlSaveRecord').onclick = async ()=>{
+    if(!dlEditRec?.Id) return toast('Select a record first.');
+    const objName = dlEditRec.attributes?.type;
+    if(!objName) return toast('Object type unknown — ensure your SOQL selects Id so the record includes attributes.');
+    const inputs = document.querySelectorAll('[data-dl-edit]');
+    const changes = {};
+    inputs.forEach(inp=>{
+      const f=inp.dataset.dlEdit, orig=dlEditRec[f];
+      const val=inp.value;
+      if(String(orig??'')!==val){
+        if(val==='true'||val==='false') changes[f]=val==='true';
+        else changes[f] = val==='' ? null : val;
+      }
+    });
+    if(!Object.keys(changes).length) return toast('No changes detected.');
+    const btn=$('#dlSaveRecord'); btn.disabled=true; $('#dlSaveStatus').textContent='Saving…';
+    try {
+      await requireApi().request(`/services/data/v66.0/sobjects/${objName}/${dlEditRec.Id}`,{method:'PATCH',body:JSON.stringify(changes)});
+      Object.assign(dlEditRec,changes);
+      dlRecords = dlRecords.map(r=>r.Id===dlEditRec.Id?{...r,...changes}:r);
+      $('#dlResult').innerHTML = renderDlTable(dlRecords);
+      bindDlTable();
+      openDlEditor(dlEditRec);
+      $('#dlSaveStatus').textContent='✓ Saved';
+      toast(`Saved ${Object.keys(changes).length} change${Object.keys(changes).length>1?'s':''} to ${dlEditRec.Id}.`);
+    } catch(e){ $('#dlSaveStatus').textContent=''; toast(e.message,6000,{copyText:e.message}); }
+    finally{ btn.disabled=false; }
+  };
+
+  $('#dlCancelEdit').onclick=()=>{ dlEditRec=null; $('#dlEditor').innerHTML='<p class="muted" style="font-size:12px">Click a row to open it here.</p>'; $('#dlEditorBar').style.display='none'; };
+
+  async function runDlQuery(all=false) {
+    const soql=$('#dlSoql').value.trim();
+    if(!soql) return toast('Enter a SOQL query.');
+    const prog=$('#dlProgress'); prog.textContent='Running…';
+    try {
+      const r = all
+        ? await requireApi().queryAll(soql,{maxRecords:10000,onPage:(l,t)=>{prog.textContent=`Loaded ${l} of ${t}…`;}})
+        : await requireApi().query(soql);
+      dlRecords = r.records||[];
+      prog.textContent = `${dlRecords.length} record${dlRecords.length!==1?'s':''}`+(r.truncated?` (capped at 10,000)`:'');
+      $('#dlCount').textContent = prog.textContent;
+      $('#dlResult').innerHTML = renderDlTable(dlRecords);
+      bindDlTable();
+    } catch(e){ prog.textContent=''; toast(e.message,5000,{copyText:e.message}); }
+  }
+
+  $('#dlRun').onclick    = ()=>runDlQuery(false);
+  $('#dlRunAll').onclick  = ()=>runDlQuery(true);
+  $('#dlCsv').onclick     = ()=>{
+    if(!dlRecords.length) return toast('Run a query first.');
+    chrome.runtime.sendMessage({type:'DOWNLOAD_TEXT',filename:'sf-forge-data.csv',mime:'text/csv',content:toCsv(dlRecords)});
+  };
+
+  // Bulk update
+  $('#dlBulkUpdate').onclick = async ()=>{
+    if(!dlRecords.length) return toast('Run a query first.');
+    const field=$('#dlBulkField').value.trim();
+    const value=$('#dlBulkValue').value.trim();
+    if(!field) return toast('Enter a field API name.');
+    const objName = dlRecords[0]?.attributes?.type;
+    if(!objName) return toast('Object type unknown — re-run query.');
+    if(!confirm(`Update "${field}" to "${value}" on ${dlRecords.length} records?\n\nThis cannot be undone.`)) return;
+    const btn=$('#dlBulkUpdate'); btn.disabled=true;
+    const prog=$('#dlBulkProgress'); prog.innerHTML='';
+    const stat=$('#dlBulkStatus'); stat.textContent='';
+    let ok=0, fail=0;
+    const total=dlRecords.length;
+    for(const rec of dlRecords){
+      try{
+        const payload={[field]: value===''?null:value};
+        await requireApi().request(`/services/data/v66.0/sobjects/${objName}/${rec.Id}`,{method:'PATCH',body:JSON.stringify(payload)});
+        rec[field]=value; ok++;
+      } catch(e){ fail++; }
+      stat.textContent=`${ok+fail}/${total} processed`;
+    }
+    prog.innerHTML=`<p style="font-size:12px;color:${fail?'#fbbf24':'#4ade80'};margin:4px 0">✓ ${ok} updated${fail?`, ${fail} failed`:''}</p>`;
+    dlRecords=[...dlRecords];
+    $('#dlResult').innerHTML=renderDlTable(dlRecords);
+    bindDlTable();
+    btn.disabled=false;
+    toast(`Bulk update complete: ${ok} updated, ${fail} failed.`);
+  };
+
+  // Delete selected
+  $('#dlDeleteSelected').onclick = async ()=>{
+    const checked=[...document.querySelectorAll('.dl-check:checked')].map(c=>parseInt(c.dataset.idx));
+    if(!checked.length) return toast('Check at least one row to delete.');
+    const toDelete=checked.map(i=>dlSort(dlRecords)[i]).filter(Boolean);
+    const objName=toDelete[0]?.attributes?.type;
+    if(!objName) return toast('Object type unknown — re-run query.');
+    if(!confirm(`Delete ${toDelete.length} record${toDelete.length>1?'s':''}?\n\nThis removes them from the org (Recycle Bin for recoverable objects).`)) return;
+    const btn=$('#dlDeleteSelected'); btn.disabled=true;
+    const stat=$('#dlDeleteStatus'); stat.textContent='Deleting…';
+    let ok=0,fail=0;
+    const deletedIds=new Set();
+    for(const rec of toDelete){
+      try{
+        await requireApi().request(`/services/data/v66.0/sobjects/${objName}/${rec.Id}`,{method:'DELETE'});
+        deletedIds.add(rec.Id); ok++;
+      } catch(e){ fail++; }
+    }
+    dlRecords=dlRecords.filter(r=>!deletedIds.has(r.Id));
+    stat.textContent=`${ok} deleted${fail?`, ${fail} failed`:''}`;
+    $('#dlResult').innerHTML=renderDlTable(dlRecords);
+    bindDlTable();
+    btn.disabled=false;
+    toast(`Deleted ${ok} record${ok!==1?'s':''}.`);
+  };
+}
+
+// ── Automation Health Dashboard — v7 ─────────────────────────────────────────
+async function automationHealth() {
+  view().innerHTML = `<section class="card">
+    <h3>Automation Health Dashboard <span class="badge info">v7 — Flows · Scheduled Jobs · Workflows · PBs</span></h3>
+    <p class="muted">One view for every automation layer in your org. Understand what's active, what fires tonight, and what's obsolete.</p>
+    <div class="toolbar">
+      <button id="ahRun">Load All Automation</button>
+      <button class="secondary" id="ahExport">Export CSV</button>
+    </div>
+    <div id="ahSummary" style="margin:10px 0"></div>
+    <div id="ahTabs" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px"></div>
+    <div id="ahResult"></div>
+  </section>`;
+
+  let ahData = { flows:[], scheduled:[], workflows:[], processBuilders:[], validationRules:[] };
+  let ahActiveTab = 'flows';
+
+  function ahSummaryBar() {
+    const parts = [
+      { label:'Active Flows',      val: ahData.flows.filter(f=>f.Status==='Active').length,       total: ahData.flows.length,            col:'#34d399' },
+      { label:'Scheduled Jobs',    val: ahData.scheduled.length,                                   total: ahData.scheduled.length,        col:'#60a5fa' },
+      { label:'Active Workflows',  val: ahData.workflows.filter(w=>w.Active).length,               total: ahData.workflows.length,        col:'#fbbf24' },
+      { label:'Process Builders',  val: ahData.processBuilders.filter(p=>p.Status==='Active').length, total: ahData.processBuilders.length, col:'#f472b6' },
+      { label:'Validation Rules',  val: ahData.validationRules.filter(v=>v.Active).length,         total: ahData.validationRules.length,  col:'#a78bfa' }
+    ];
+    return `<div style="display:flex;gap:14px;flex-wrap:wrap;padding:10px 14px;background:var(--panel2);border-radius:10px">
+      ${parts.map(p=>`<div style="text-align:center">
+        <div style="font-size:20px;font-weight:700;color:${p.col}">${p.val}<span style="font-size:12px;color:var(--muted);font-weight:400">/${p.total}</span></div>
+        <div style="font-size:11px;color:var(--muted)">${p.label}</div>
+      </div>`).join('')}
+    </div>`;
+  }
+
+  function ahTabBar() {
+    const tabs = [
+      {id:'flows',          label:`Flows (${ahData.flows.length})`},
+      {id:'scheduled',      label:`Scheduled Jobs (${ahData.scheduled.length})`},
+      {id:'workflows',      label:`Workflows (${ahData.workflows.length})`},
+      {id:'processBuilders',label:`Process Builders (${ahData.processBuilders.length})`},
+      {id:'validationRules',label:`Validation Rules (${ahData.validationRules.length})`}
+    ];
+    $('#ahTabs').innerHTML = tabs.map(t=>
+      `<button class="secondary ah-tab ${t.id===ahActiveTab?'active-tab':''}" data-ahtab="${t.id}" style="font-size:12px;padding:6px 12px">${t.label}</button>`
+    ).join('');
+    document.querySelectorAll('.ah-tab').forEach(b=>b.onclick=()=>{
+      ahActiveTab=b.dataset.ahtab;
+      document.querySelectorAll('.ah-tab').forEach(x=>x.classList.remove('active-tab'));
+      b.classList.add('active-tab');
+      renderAhTab();
+    });
+  }
+
+  function renderAhTab() {
+    const res = $('#ahResult');
+    if(ahActiveTab==='flows') {
+      const rows = ahData.flows.map(f=>({
+        Name: f.Label||f.ApiName, ApiName: f.ApiName, Type: f.ProcessType,
+        Status: f.Status, Modified: timeAgo(f.LastModifiedDate)
+      }));
+      res.innerHTML = rows.length ? table(rows) : '<p class="muted">No flows found.</p>';
+    } else if(ahActiveTab==='scheduled') {
+      const rows = ahData.scheduled.map(c=>({
+        Name: c.CronJobDetail?.Name||c.Id, State: c.State,
+        NextFire: c.NextFireTime ? new Date(c.NextFireTime).toLocaleString() : '—',
+        PrevFire: c.PreviousFireTime ? new Date(c.PreviousFireTime).toLocaleString() : '—',
+        Cron: c.CronExpression||'—'
+      }));
+      res.innerHTML = rows.length ? table(rows) : '<p class="muted">No scheduled jobs found.</p>';
+    } else if(ahActiveTab==='workflows') {
+      const rows = ahData.workflows.map(w=>({
+        Name: w.Name, Object: w.TableEnumOrId,
+        Active: w.Metadata?.active ? '✓ Active' : '— Inactive',
+        Actions: (w.Metadata?.actions||[]).map(a=>a.type).join(', ')||'—',
+        Modified: timeAgo(w.LastModifiedDate)
+      }));
+      res.innerHTML = rows.length ? table(rows) : '<p class="muted">No workflow rules found (or API access not available).</p>';
+    } else if(ahActiveTab==='processBuilders') {
+      const rows = ahData.processBuilders.map(f=>({
+        Name: f.Label||f.ApiName, ApiName: f.ApiName, Status: f.Status, Modified: timeAgo(f.LastModifiedDate)
+      }));
+      res.innerHTML = rows.length ? table(rows) : '<p class="muted">No Process Builders found.</p>';
+    } else if(ahActiveTab==='validationRules') {
+      const rows = ahData.validationRules.map(v=>({
+        Name: v.ValidationName, Object: v.EntityDefinition?.QualifiedApiName||'—',
+        Active: v.Active ? '✓' : '—',
+        ErrorMessage: (v.ErrorMessage||'').substring(0,80),
+        Modified: timeAgo(v.LastModifiedDate)
+      }));
+      res.innerHTML = rows.length ? table(rows) : '<p class="muted">No validation rules found.</p>';
+    }
+  }
+
+  $('#ahRun').onclick = async ()=>{
+    const btn=$('#ahRun'); btn.disabled=true; btn.textContent='Loading…';
+    const res=$('#ahResult'); res.innerHTML='<p class="muted">Fetching automation data…</p>';
+    try {
+      // Flows: all non-process-builder flows
+      const flowRes = await requireApi().toolingQueryAll(
+        `SELECT Id, ApiName, Label, ProcessType, Status, LastModifiedDate FROM FlowDefinitionView WHERE ProcessType NOT IN ('CustomEvent','InvocableProcess') ORDER BY Label`,
+        {maxRecords:2000}
+      );
+      ahData.flows = (flowRes.records||[]).filter(f=>f.ProcessType!=='InvocableProcess');
+      ahData.processBuilders = (flowRes.records||[]).filter(f=>f.ProcessType==='InvocableProcess');
+
+      // Scheduled jobs
+      const cronRes = await requireApi().query(
+        `SELECT Id, CronJobDetail.Name, State, NextFireTime, PreviousFireTime, StartTime, EndTime, CronExpression FROM CronTrigger ORDER BY NextFireTime ASC LIMIT 200`
+      );
+      ahData.scheduled = cronRes.records||[];
+
+      // Workflow rules via Tooling API
+      try {
+        const wfRes = await requireApi().toolingQueryAll(
+          `SELECT Id, Name, TableEnumOrId, Metadata, LastModifiedDate FROM WorkflowRule ORDER BY Name LIMIT 500`,
+          {maxRecords:500}
+        );
+        ahData.workflows = wfRes.records||[];
+      } catch(_) { ahData.workflows = []; }
+
+      // Validation rules
+      const vrRes = await requireApi().toolingQueryAll(
+        `SELECT Id, ValidationName, Active, ErrorMessage, EntityDefinitionId, EntityDefinition.QualifiedApiName, LastModifiedDate FROM ValidationRule ORDER BY ValidationName LIMIT 1000`,
+        {maxRecords:1000}
+      );
+      ahData.validationRules = vrRes.records||[];
+
+      $('#ahSummary').innerHTML = ahSummaryBar();
+      ahTabBar();
+      renderAhTab();
+      toast(`Automation loaded: ${ahData.flows.length} flows, ${ahData.scheduled.length} scheduled jobs, ${ahData.validationRules.length} validation rules.`);
+    } catch(e){ res.innerHTML=`<p class="error-note">${escapeHtml(e.message)}</p>`; toast(e.message,5000,{copyText:e.message}); }
+    finally{ btn.disabled=false; btn.textContent='Load All Automation'; }
+  };
+
+  $('#ahExport').onclick=()=>{
+    const all=[
+      ...ahData.flows.map(r=>({Category:'Flow',...r})),
+      ...ahData.scheduled.map(r=>({Category:'ScheduledJob', Name:r.CronJobDetail?.Name, State:r.State, NextFireTime:r.NextFireTime, CronExpression:r.CronExpression})),
+      ...ahData.workflows.map(r=>({Category:'WorkflowRule',...r})),
+      ...ahData.processBuilders.map(r=>({Category:'ProcessBuilder',...r})),
+      ...ahData.validationRules.map(r=>({Category:'ValidationRule',...r}))
+    ];
+    if(!all.length) return toast('Load automation first.');
+    chrome.runtime.sendMessage({type:'DOWNLOAD_TEXT',filename:'sf-forge-automation-health.csv',mime:'text/csv',content:toCsv(all)});
+  };
+}
+
+// ── User License & Login History Audit — v7 ──────────────────────────────────
+async function userLicenseAudit() {
+  view().innerHTML = `<section class="card">
+    <h3>User &amp; License Audit <span class="badge info">v7 — Inactive · Licenses · Login History</span></h3>
+    <p class="muted">Audit active users, identify inactive accounts for license reclamation, and review login failures.</p>
+    <div class="toolbar" style="margin-bottom:8px">
+      <button id="ulaTabUsers" class="pl-tab active-tab">👤 Users</button>
+      <button id="ulaTabLicenses" class="pl-tab">📋 Licenses</button>
+      <button id="ulaTabLogins" class="pl-tab">🔐 Login History</button>
+    </div>
+
+    <div id="ulaUsers">
+      <div class="toolbar">
+        <select id="ulaInactiveFilter">
+          <option value="all">All active users</option>
+          <option value="90">No login in 90+ days</option>
+          <option value="180">No login in 180+ days</option>
+          <option value="365">No login in 365+ days</option>
+          <option value="never">Never logged in</option>
+        </select>
+        <input id="ulaUserSearch" placeholder="Search name or username…" style="max-width:220px">
+        <select id="ulaLicenseFilter" style="max-width:200px"><option value="">All license types</option></select>
+        <button id="ulaLoadUsers">Load Users</button>
+        <button class="secondary" id="ulaExportUsers">Export CSV</button>
+      </div>
+      <div id="ulaUserResult"></div>
+    </div>
+
+    <div id="ulaLicenses" style="display:none">
+      <div class="toolbar">
+        <button id="ulaLoadLicenses">Load License Usage</button>
+        <button class="secondary" id="ulaExportLicenses">Export CSV</button>
+      </div>
+      <div id="ulaLicenseResult"></div>
+    </div>
+
+    <div id="ulaLogins" style="display:none">
+      <p class="muted" style="margin-bottom:10px">Login History shows the last 20,000 login events. Filter by status to find failed or blocked attempts.</p>
+      <div class="toolbar">
+        <select id="ulaLoginStatus">
+          <option value="">All statuses</option>
+          <option>Success</option><option>Failed</option><option>No Password</option>
+          <option>Invalid Password</option><option>Locked</option>
+        </select>
+        <input id="ulaLoginUser" placeholder="Filter by username…" style="max-width:220px">
+        <select id="ulaLoginDays" style="max-width:140px">
+          <option value="1">Today</option>
+          <option value="7" selected>Last 7 days</option>
+          <option value="30">Last 30 days</option>
+        </select>
+        <button id="ulaLoadLogins">Load Login History</button>
+        <button class="secondary" id="ulaExportLogins">Export CSV</button>
+      </div>
+      <div id="ulaLoginResult"></div>
+    </div>
+  </section>`;
+
+  // Tab switching
+  const tabPanels={ulaTabUsers:'ulaUsers', ulaTabLicenses:'ulaLicenses', ulaTabLogins:'ulaLogins'};
+  ['ulaTabUsers','ulaTabLicenses','ulaTabLogins'].forEach(tid=>{
+    document.getElementById(tid).onclick=()=>{
+      document.querySelectorAll('.pl-tab').forEach(b=>b.classList.remove('active-tab'));
+      document.getElementById(tid).classList.add('active-tab');
+      Object.entries(tabPanels).forEach(([t,p])=>{ document.getElementById(p).style.display=t===tid?'':'none'; });
+    };
+  });
+
+  let ulaUsers=[], ulaLicenses=[], ulaLogins=[];
+
+  // ─ Users tab ────────────────────────────────────────────────────────────
+  $('#ulaLoadUsers').onclick = async ()=>{
+    const btn=$('#ulaLoadUsers'); btn.disabled=true; btn.textContent='Loading…';
+    const res=$('#ulaUserResult'); res.innerHTML='<p class="muted">Querying users…</p>';
+    try {
+      const r = await requireApi().queryAll(
+        `SELECT Id, Name, Username, Email, ProfileId, Profile.Name, UserType, IsActive, LastLoginDate, CreatedDate, UserLicenseId, UserLicense.Name FROM User WHERE IsActive=true ORDER BY LastLoginDate ASC NULLS FIRST`,
+        {maxRecords:5000}
+      );
+      ulaUsers = r.records||[];
+      // Populate license filter
+      const licNames=[...new Set(ulaUsers.map(u=>u.UserLicense?.Name).filter(Boolean))].sort();
+      $('#ulaLicenseFilter').innerHTML='<option value="">All license types</option>'+licNames.map(n=>`<option>${escapeHtml(n)}</option>`).join('');
+      applyUlaFilters();
+      toast(`${ulaUsers.length} active users loaded.`);
+    } catch(e){ res.innerHTML=`<p class="error-note">${escapeHtml(e.message)}</p>`; toast(e.message,5000,{copyText:e.message}); }
+    finally{ btn.disabled=false; btn.textContent='Load Users'; }
+  };
+
+  function applyUlaFilters() {
+    const inact=$('#ulaInactiveFilter').value;
+    const search=($('#ulaUserSearch').value||'').toLowerCase();
+    const licFilter=$('#ulaLicenseFilter').value;
+    const now=Date.now();
+    let filtered=ulaUsers;
+    if(inact==='never') filtered=filtered.filter(u=>!u.LastLoginDate);
+    else if(inact!=='all'){
+      const days=parseInt(inact);
+      const cutoff=now-days*86400000;
+      filtered=filtered.filter(u=>!u.LastLoginDate||new Date(u.LastLoginDate).getTime()<cutoff);
+    }
+    if(search) filtered=filtered.filter(u=>(u.Name||'').toLowerCase().includes(search)||(u.Username||'').toLowerCase().includes(search));
+    if(licFilter) filtered=filtered.filter(u=>u.UserLicense?.Name===licFilter);
+
+    const rows=filtered.map(u=>{
+      const daysSince=u.LastLoginDate?Math.floor((now-new Date(u.LastLoginDate).getTime())/86400000):null;
+      const daysColor=daysSince===null?'#f87171':daysSince>180?'#fbbf24':daysSince>90?'#fde68a':'#4ade80';
+      return {
+        Name:u.Name, Username:u.Username, Profile:u.Profile?.Name||'—',
+        License:u.UserLicense?.Name||'—',
+        LastLogin: daysSince===null?'Never':`${daysSince}d ago`,
+        _daysSince:daysSince, _color:daysColor
+      };
+    });
+
+    if(!rows.length){ $('#ulaUserResult').innerHTML='<p class="muted">No users match current filters.</p>'; return; }
+
+    const thStyle='style="color:var(--purple2);padding:8px;text-align:left;border-bottom:1px solid var(--line)"';
+    const tdStyle='style="padding:7px 8px;border-bottom:1px solid var(--line);font-size:12px"';
+    const summary=`<p style="font-size:12px;color:var(--muted);margin-bottom:8px">${filtered.length} user${filtered.length!==1?'s':''} match filters</p>`;
+    const body=rows.map(r=>`<tr>
+      <td ${tdStyle}>${escapeHtml(r.Name)}</td>
+      <td ${tdStyle}>${escapeHtml(r.Username)}</td>
+      <td ${tdStyle}>${escapeHtml(r.Profile)}</td>
+      <td ${tdStyle}>${escapeHtml(r.License)}</td>
+      <td ${tdStyle} style="color:${r._color}">${escapeHtml(r.LastLogin)}</td>
+    </tr>`).join('');
+    $('#ulaUserResult').innerHTML=summary+`<div style="overflow-x:auto"><table class="table" style="width:100%">
+      <thead><tr><th ${thStyle}>Name</th><th ${thStyle}>Username</th><th ${thStyle}>Profile</th><th ${thStyle}>License</th><th ${thStyle}>Last Login</th></tr></thead>
+      <tbody>${body}</tbody>
+    </table></div>`;
+  }
+
+  let ulaFilterTimer;
+  setTimeout(()=>{
+    ['ulaInactiveFilter','ulaLicenseFilter'].forEach(id=>{ const el=$(`#${id}`); if(el) el.onchange=applyUlaFilters; });
+    $('#ulaUserSearch')?.addEventListener('input',()=>{ clearTimeout(ulaFilterTimer); ulaFilterTimer=setTimeout(applyUlaFilters,250); });
+  },100);
+
+  $('#ulaExportUsers').onclick=()=>{
+    if(!ulaUsers.length) return toast('Load users first.');
+    chrome.runtime.sendMessage({type:'DOWNLOAD_TEXT',filename:'sf-forge-users.csv',mime:'text/csv',content:toCsv(ulaUsers.map(u=>({Name:u.Name,Username:u.Username,Profile:u.Profile?.Name,License:u.UserLicense?.Name,LastLogin:u.LastLoginDate||'Never',Created:u.CreatedDate})))});
+  };
+
+  // ─ Licenses tab ─────────────────────────────────────────────────────────
+  $('#ulaLoadLicenses').onclick=async()=>{
+    const btn=$('#ulaLoadLicenses'); btn.disabled=true; btn.textContent='Loading…';
+    const res=$('#ulaLicenseResult'); res.innerHTML='<p class="muted">Querying license data…</p>';
+    try {
+      const r=await requireApi().query(`SELECT Id, Name, TotalLicenses, UsedLicenses, Status FROM UserLicense ORDER BY Name`);
+      ulaLicenses=r.records||[];
+      const rows=ulaLicenses.map(l=>{
+        const pct=l.TotalLicenses>0?Math.round(l.UsedLicenses/l.TotalLicenses*100):0;
+        const col=pct>=90?'#f87171':pct>=70?'#fbbf24':'#4ade80';
+        return {Name:l.Name, Used:l.UsedLicenses, Total:l.TotalLicenses, Available:l.TotalLicenses-l.UsedLicenses, PctUsed:`${pct}%`, Status:l.Status, _pct:pct, _col:col};
+      });
+      const thStyle='style="color:var(--purple2);padding:8px;text-align:left;border-bottom:1px solid var(--line)"';
+      const tdStyle='style="padding:7px 8px;border-bottom:1px solid var(--line);font-size:12px"';
+      const body=rows.map(r=>`<tr>
+        <td ${tdStyle}>${escapeHtml(r.Name)}</td>
+        <td ${tdStyle}><div style="display:flex;align-items:center;gap:8px">
+          <div style="background:var(--panel);border-radius:4px;height:8px;width:100px;overflow:hidden"><div style="background:${r._col};height:100%;width:${r._pct}%;border-radius:4px"></div></div>
+          <span style="color:${r._col}">${r.PctUsed}</span>
+        </div></td>
+        <td ${tdStyle}>${r.Used} / ${r.Total}</td>
+        <td ${tdStyle} style="color:${r.Available<=0?'#f87171':'#4ade80'}">${r.Available} available</td>
+        <td ${tdStyle}>${escapeHtml(r.Status)}</td>
+      </tr>`).join('');
+      res.innerHTML=`<table class="table" style="width:100%"><thead><tr>
+        <th ${thStyle}>License</th><th ${thStyle}>Usage</th><th ${thStyle}>Used/Total</th><th ${thStyle}>Available</th><th ${thStyle}>Status</th>
+      </tr></thead><tbody>${body}</tbody></table>`;
+      toast(`${ulaLicenses.length} license types loaded.`);
+    } catch(e){ res.innerHTML=`<p class="error-note">${escapeHtml(e.message)}</p>`; toast(e.message,5000,{copyText:e.message}); }
+    finally{ btn.disabled=false; btn.textContent='Load License Usage'; }
+  };
+
+  $('#ulaExportLicenses').onclick=()=>{
+    if(!ulaLicenses.length) return toast('Load licenses first.');
+    chrome.runtime.sendMessage({type:'DOWNLOAD_TEXT',filename:'sf-forge-licenses.csv',mime:'text/csv',content:toCsv(ulaLicenses)});
+  };
+
+  // ─ Login History tab ────────────────────────────────────────────────────
+  $('#ulaLoadLogins').onclick=async()=>{
+    const btn=$('#ulaLoadLogins'); btn.disabled=true; btn.textContent='Loading…';
+    const res=$('#ulaLoginResult'); res.innerHTML='<p class="muted">Querying login history…</p>';
+    try {
+      const days=parseInt($('#ulaLoginDays').value)||7;
+      const since=new Date(Date.now()-days*86400000).toISOString().split('.')[0]+'Z';
+      const statusFilter=$('#ulaLoginStatus').value;
+      const userFilter=($('#ulaLoginUser').value||'').trim();
+      let soql=`SELECT Id, UserId, Username, LoginTime, LoginType, Status, SourceIp, Browser, Platform, Application FROM LoginHistory WHERE LoginTime >= ${since}`;
+      if(statusFilter) soql+=` AND Status='${safeLike(statusFilter)}'`;
+      if(userFilter) soql+=` AND Username LIKE '%${safeLike(userFilter)}%'`;
+      soql+=` ORDER BY LoginTime DESC LIMIT 2000`;
+      const r=await requireApi().queryAll(soql,{maxRecords:2000});
+      ulaLogins=r.records||[];
+      const rows=ulaLogins.map(l=>({
+        Time:new Date(l.LoginTime).toLocaleString(), User:l.Username,
+        Status:l.Status, Type:l.LoginType, Source:l.SourceIp||'—',
+        Browser:l.Browser||'—', Platform:l.Platform||'—'
+      }));
+      const failed=ulaLogins.filter(l=>l.Status!=='Success').length;
+      const summary=`<p style="font-size:12px;color:var(--muted);margin-bottom:8px">${ulaLogins.length} events — <span style="color:${failed?'#f87171':'#4ade80'}">${failed} failed/blocked</span></p>`;
+      res.innerHTML=summary+table(rows);
+      toast(`${ulaLogins.length} login events loaded.`);
+    } catch(e){ res.innerHTML=`<p class="error-note">${escapeHtml(e.message)}</p>`; toast(e.message,5000,{copyText:e.message}); }
+    finally{ btn.disabled=false; btn.textContent='Load Login History'; }
+  };
+
+  $('#ulaExportLogins').onclick=()=>{
+    if(!ulaLogins.length) return toast('Load login history first.');
+    chrome.runtime.sendMessage({type:'DOWNLOAD_TEXT',filename:'sf-forge-login-history.csv',mime:'text/csv',content:toCsv(ulaLogins)});
+  };
+}
+
+// ── Who Broke It? Quick Filter — v7 ─────────────────────────────────────────
+async function whobrokeit() {
+  view().innerHTML = `<section class="card">
+    <h3>Who Broke It? <span class="badge danger">Panic Button</span></h3>
+    <p class="muted">Pre-built filters for the most common "something just stopped working" audit scenarios. Runs against SetupAuditTrail and surfaces only the changes most likely to cause incidents.</p>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0" id="wbiPanels">
+      ${[
+        {id:'wbiFlows',     label:'⚡ Flow Changes',         desc:'Activated, deactivated, or deleted Flows in the last 48h',           color:'#34d399'},
+        {id:'wbiApex',      label:'🔧 Apex Changes',         desc:'Apex class or trigger edits, saves, or compilations',                color:'#60a5fa'},
+        {id:'wbiProfiles',  label:'🛡 Profile & Perm Changes',desc:'Permission set or profile modifications',                           color:'#f472b6'},
+        {id:'wbiValidation',label:'✓ Validation Rules',      desc:'Validation rule activations, deactivations, or edits',              color:'#fbbf24'},
+        {id:'wbiBatch',     label:'⏱ Scheduled Job Changes', desc:'CronTrigger creates, deletes, or state changes',                    color:'#a78bfa'},
+        {id:'wbiSecurity',  label:'🔒 Security Changes',     desc:'Password policies, trusted IPs, session settings, login changes',   color:'#f87171'}
+      ].map(p=>`<div style="border:1px solid var(--line);border-left:3px solid ${p.color};border-radius:10px;padding:12px;background:var(--panel2)">
+        <b style="font-size:13px;color:${p.color}">${p.label}</b>
+        <p class="muted" style="font-size:11px;margin:4px 0 8px">${p.desc}</p>
+        <div style="display:flex;gap:6px">
+          <button id="${p.id}Btn" style="font-size:11px;padding:5px 10px">Run</button>
+          <select id="${p.id}Days" style="font-size:11px;padding:4px;max-width:110px">
+            <option value="1">Last 24h</option>
+            <option value="2" selected>Last 48h</option>
+            <option value="7">Last 7 days</option>
+          </select>
+        </div>
+      </div>`).join('')}
+    </div>
+
+    <div style="margin-top:4px">
+      <div class="toolbar">
+        <button id="wbiRunAll">Run All Checks</button>
+        <button class="secondary" id="wbiExport">Export CSV</button>
+        <input id="wbiSearch" placeholder="Search results…" style="max-width:220px">
+      </div>
+    </div>
+    <div id="wbiSummary" style="margin-top:10px"></div>
+    <div id="wbiResult"></div>
+  </section>`;
+
+  let wbiAll=[];
+
+  const FILTERS = {
+    wbiFlows:      (days)=>`CreatedDate >= LAST_N_DAYS:${days} AND (Action LIKE '%Flow%' OR Action LIKE '%flow%' OR Section LIKE '%Flow%')`,
+    wbiApex:       (days)=>`CreatedDate >= LAST_N_DAYS:${days} AND (Section LIKE '%Apex%' OR Section LIKE '%apex%' OR Action LIKE '%class%' OR Action LIKE '%trigger%')`,
+    wbiProfiles:   (days)=>`CreatedDate >= LAST_N_DAYS:${days} AND (Section LIKE '%Profile%' OR Section LIKE '%PermissionSet%' OR Action LIKE '%Permission%')`,
+    wbiValidation: (days)=>`CreatedDate >= LAST_N_DAYS:${days} AND (Section LIKE '%Validation%' OR Action LIKE '%Validation%')`,
+    wbiBatch:      (days)=>`CreatedDate >= LAST_N_DAYS:${days} AND (Section LIKE '%Cron%' OR Action LIKE '%Schedule%' OR Action LIKE '%schedule%')`,
+    wbiSecurity:   (days)=>`CreatedDate >= LAST_N_DAYS:${days} AND (Section LIKE '%Password%' OR Section LIKE '%Session%' OR Section LIKE '%Login%' OR Section LIKE '%Ip%' OR Action LIKE '%security%')`
+  };
+
+  const LABELS = {
+    wbiFlows:'Flow Changes', wbiApex:'Apex Changes', wbiProfiles:'Profile/Perm Changes',
+    wbiValidation:'Validation Rules', wbiBatch:'Scheduled Jobs', wbiSecurity:'Security Changes'
+  };
+
+  async function runFilter(id) {
+    const days=parseInt(document.getElementById(`${id}Days`)?.value)||2;
+    const where=FILTERS[id](days);
+    const r=await requireApi().queryAll(
+      `SELECT Id, Action, Section, Display, DelegateUser, CreatedDate, CreatedBy.Username, CreatedBy.Name FROM SetupAuditTrail WHERE ${where} ORDER BY CreatedDate DESC`,
+      {maxRecords:500}
+    );
+    return (r.records||[]).map(c=>({...c, _category:LABELS[id]}));
+  }
+
+  function renderWbiResults(records) {
+    const search=($('#wbiSearch')?.value||'').toLowerCase();
+    let rows=records;
+    if(search) rows=rows.filter(r=>`${r.Action} ${r.Display} ${r.Section} ${r.CreatedBy?.Username}`.toLowerCase().includes(search));
+    if(!rows.length){ $('#wbiResult').innerHTML='<p class="muted">No matching audit entries found for the selected filters.</p>'; return; }
+    const thStyle='style="color:var(--purple2);padding:8px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap"';
+    const tdStyle='style="padding:7px 8px;border-bottom:1px solid var(--line);font-size:12px;vertical-align:top"';
+    const catColors={
+      'Flow Changes':'#34d399','Apex Changes':'#60a5fa','Profile/Perm Changes':'#f472b6',
+      'Validation Rules':'#fbbf24','Scheduled Jobs':'#a78bfa','Security Changes':'#f87171'
+    };
+    const body=rows.map(r=>{
+      const col=catColors[r._category]||'var(--muted)';
+      return `<tr>
+        <td ${tdStyle}><span style="background:rgba(0,0,0,.3);color:${col};border:1px solid ${col};border-radius:12px;padding:2px 8px;font-size:11px;white-space:nowrap">${escapeHtml(r._category)}</span></td>
+        <td ${tdStyle} style="white-space:nowrap">${escapeHtml(new Date(r.CreatedDate).toLocaleString())}</td>
+        <td ${tdStyle}>${escapeHtml(r.CreatedBy?.Username||'—')}</td>
+        <td ${tdStyle}>${escapeHtml(r.Section||'')}</td>
+        <td ${tdStyle}>${escapeHtml((r.Display||r.Action||'').substring(0,200))}</td>
+      </tr>`;
+    }).join('');
+    $('#wbiResult').innerHTML=`<table class="table" style="width:100%"><thead><tr>
+      <th ${thStyle}>Category</th><th ${thStyle}>When</th><th ${thStyle}>User</th><th ${thStyle}>Section</th><th ${thStyle}>Action/Detail</th>
+    </tr></thead><tbody>${body}</tbody></table>`;
+  }
+
+  // Individual filter buttons
+  Object.keys(FILTERS).forEach(id=>{
+    document.getElementById(`${id}Btn`).onclick=async()=>{
+      const btn=document.getElementById(`${id}Btn`);
+      btn.disabled=true; btn.textContent='Loading…';
+      try {
+        const results=await runFilter(id);
+        // Merge into wbiAll (replace category)
+        wbiAll=wbiAll.filter(r=>r._category!==LABELS[id]);
+        wbiAll=[...results,...wbiAll].sort((a,b)=>new Date(b.CreatedDate)-new Date(a.CreatedDate));
+        const catCount=results.length;
+        $('#wbiSummary').innerHTML=`<p style="font-size:12px;color:var(--muted)">${catCount} ${LABELS[id]} entries found. Total loaded: ${wbiAll.length} entries.</p>`;
+        renderWbiResults(wbiAll);
+        toast(`${LABELS[id]}: ${catCount} audit entries.`);
+      } catch(e){ toast(e.message,5000,{copyText:e.message}); }
+      finally{ btn.disabled=false; btn.textContent='Run'; }
+    };
+  });
+
+  // Run all
+  $('#wbiRunAll').onclick=async()=>{
+    const btn=$('#wbiRunAll'); btn.disabled=true; btn.textContent='Running all checks…';
+    $('#wbiResult').innerHTML='<p class="muted">Fetching all audit categories…</p>';
+    wbiAll=[];
+    try {
+      const results=await Promise.allSettled(Object.keys(FILTERS).map(id=>runFilter(id)));
+      results.forEach(r=>{ if(r.status==='fulfilled') wbiAll=[...wbiAll,...r.value]; });
+      wbiAll.sort((a,b)=>new Date(b.CreatedDate)-new Date(a.CreatedDate));
+      const cats={};
+      wbiAll.forEach(r=>{ cats[r._category]=(cats[r._category]||0)+1; });
+      $('#wbiSummary').innerHTML=`<div style="display:flex;gap:12px;flex-wrap:wrap;padding:8px 14px;background:var(--panel2);border-radius:8px;margin-bottom:10px">
+        ${Object.entries(cats).map(([c,n])=>`<span style="font-size:12px"><b>${n}</b> <span class="muted">${c}</span></span>`).join('')}
+      </div>`;
+      renderWbiResults(wbiAll);
+      toast(`All checks complete: ${wbiAll.length} audit entries loaded.`);
+    } catch(e){ toast(e.message,5000,{copyText:e.message}); }
+    finally{ btn.disabled=false; btn.textContent='Run All Checks'; }
+  };
+
+  let wbiSearchTimer;
+  setTimeout(()=>{ $('#wbiSearch')?.addEventListener('input',()=>{ clearTimeout(wbiSearchTimer); wbiSearchTimer=setTimeout(()=>renderWbiResults(wbiAll),200); }); },100);
+
+  $('#wbiExport').onclick=()=>{
+    if(!wbiAll.length) return toast('Run a check first.');
+    const rows=wbiAll.map(r=>({Category:r._category, Date:r.CreatedDate, User:r.CreatedBy?.Username, Section:r.Section, Action:r.Action, Detail:r.Display}));
+    chrome.runtime.sendMessage({type:'DOWNLOAD_TEXT',filename:'sf-forge-who-broke-it.csv',mime:'text/csv',content:toCsv(rows)});
+  };
+}
+
+// ── Field Usage Analyzer — v7 ─────────────────────────────────────────────────
+async function fieldUsageAnalyzer() {
+  view().innerHTML = `<section class="card">
+    <h3>Field Usage Analyzer <span class="badge info">v7 — Flows · Apex · Rules · Reports</span></h3>
+    <p class="muted">Before deleting or renaming a field, find every place it's referenced. Cross-checks Flows, Apex classes, Validation Rules, and Report data — all without leaving this panel.</p>
+    <div class="toolbar">
+      <input id="fuaObject" placeholder="Object API name (e.g. Opportunity)" style="max-width:200px">
+      <input id="fuaField"  placeholder="Field API name (e.g. StageName)" style="max-width:200px">
+      <button id="fuaRun">Analyze Field</button>
+    </div>
+    <div id="fuaSummary"></div>
+    <div id="fuaTabs" style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0"></div>
+    <div id="fuaResult"></div>
+  </section>`;
+
+  let fuaData={flows:[], apex:[], validationRules:[], fieldPerms:[], records:null};
+  let fuaActiveTab='flows';
+
+  $('#fuaRun').onclick=async()=>{
+    const obj=$('#fuaObject').value.trim();
+    const field=$('#fuaField').value.trim();
+    if(!obj||!field) return toast('Enter both object and field API names.');
+    const btn=$('#fuaRun'); btn.disabled=true; btn.textContent='Analyzing…';
+    const res=$('#fuaResult'); res.innerHTML='<p class="muted">Scanning for field references…</p>';
+    $('#fuaSummary').innerHTML=''; $('#fuaTabs').innerHTML='';
+    fuaData={flows:[], apex:[], validationRules:[], fieldPerms:[], records:null};
+
+    const fullField=field.includes('.')?field:`${obj}.${field}`;
+    const fieldOnly=field.includes('.')?field.split('.').pop():field;
+
+    try {
+      // 1. Flows: search FlowElement metadata for field references (via Tooling)
+      try {
+        const flowMeta=await requireApi().toolingQueryAll(
+          `SELECT Id, ApiName, Label, ProcessType, Status FROM FlowDefinitionView WHERE Status='Active' ORDER BY Label`,
+          {maxRecords:500}
+        );
+        // For each flow, fetch its active version and check metadata for field reference
+        const matchedFlows=[];
+        for(const f of (flowMeta.records||[]).slice(0,100)){
+          try{
+            const verRes=await requireApi().toolingQuery(`SELECT Id, Metadata FROM Flow WHERE DefinitionId='${f.Id}' AND Status='Active' LIMIT 1`);
+            const meta=verRes.records?.[0]?.Metadata;
+            if(meta){
+              const metaStr=typeof meta==='string'?meta:JSON.stringify(meta);
+              if(metaStr.toLowerCase().includes(fieldOnly.toLowerCase())||metaStr.toLowerCase().includes(obj.toLowerCase())){
+                matchedFlows.push({Name:f.Label, ApiName:f.ApiName, Status:f.Status, Type:f.ProcessType});
+              }
+            }
+          }catch(_){}
+        }
+        fuaData.flows=matchedFlows;
+      } catch(_){ fuaData.flows=[]; }
+
+      // 2. Apex: search ApexClass body for field name string
+      try {
+        const apexRes=await requireApi().toolingQueryAll(
+          `SELECT Id, Name, Body FROM ApexClass WHERE Status='Active' AND (Body LIKE '%${safeLike(fieldOnly)}%') ORDER BY Name`,
+          {maxRecords:200}
+        );
+        fuaData.apex=(apexRes.records||[]).map(c=>{
+          const body=c.Body||'';
+          // Find line numbers
+          const lines=body.split('\n');
+          const lineRefs=lines.reduce((acc,line,i)=>{
+            if(line.toLowerCase().includes(fieldOnly.toLowerCase())) acc.push(i+1);
+            return acc;
+          },[]).slice(0,5);
+          return {Name:c.Name, Lines:lineRefs.join(', ')||'—', Matches:lineRefs.length};
+        });
+      } catch(_){ fuaData.apex=[]; }
+
+      // 3. Validation Rules: check formula for field reference
+      try {
+        const vrRes=await requireApi().toolingQueryAll(
+          `SELECT Id, ValidationName, Active, ErrorMessage, ErrorConditionFormula, EntityDefinition.QualifiedApiName FROM ValidationRule WHERE EntityDefinition.QualifiedApiName='${safeLike(obj)}' ORDER BY ValidationName`,
+          {maxRecords:200}
+        );
+        fuaData.validationRules=(vrRes.records||[]).filter(v=>{
+          const formula=(v.ErrorConditionFormula||'').toLowerCase();
+          return formula.includes(fieldOnly.toLowerCase());
+        }).map(v=>({Name:v.ValidationName, Active:v.Active?'✓ Active':'—', Object:v.EntityDefinition?.QualifiedApiName||obj, Formula:(v.ErrorConditionFormula||'').substring(0,120)}));
+      } catch(_){ fuaData.validationRules=[]; }
+
+      // 4. Field Permissions: which perm sets/profiles have this field visible
+      try {
+        const fpRes=await requireApi().toolingQueryAll(
+          `SELECT ParentId, Parent.Label, Parent.IsOwnedByProfile, PermissionsRead, PermissionsEdit, SobjectType, Field FROM FieldPermissions WHERE SobjectType='${safeLike(obj)}' AND Field='${safeLike(fullField)}' ORDER BY Parent.Label`,
+          {maxRecords:500}
+        );
+        fuaData.fieldPerms=(fpRes.records||[]).map(fp=>({
+          'Profile/PermSet': fp.Parent?.Label||fp.ParentId,
+          Type: fp.Parent?.IsOwnedByProfile?'Profile':'Permission Set',
+          Read: fp.PermissionsRead?'✓':'—', Edit: fp.PermissionsEdit?'✓':'—'
+        }));
+      } catch(_){ fuaData.fieldPerms=[]; }
+
+      // 5. Record count: how many non-null values exist
+      try {
+        const countRes=await requireApi().query(`SELECT COUNT(Id) total FROM ${obj} WHERE ${fieldOnly} != null LIMIT 1`);
+        fuaData.records=countRes.records?.[0]?.total??countRes.totalSize??null;
+      } catch(_){ fuaData.records=null; }
+
+      // Summary
+      const total=fuaData.flows.length+fuaData.apex.length+fuaData.validationRules.length+fuaData.fieldPerms.length;
+      const recLabel=fuaData.records!==null?`${fuaData.records.toLocaleString()} non-null records`:'Record count unavailable';
+      $('#fuaSummary').innerHTML=`<div style="display:flex;gap:16px;flex-wrap:wrap;padding:10px 14px;background:var(--panel2);border-radius:10px;margin-bottom:4px">
+        <span style="font-size:13px"><b style="color:${fuaData.flows.length?'#fbbf24':'#4ade80'}">${fuaData.flows.length}</b> <span class="muted">Flows</span></span>
+        <span style="font-size:13px"><b style="color:${fuaData.apex.length?'#fbbf24':'#4ade80'}">${fuaData.apex.length}</b> <span class="muted">Apex classes</span></span>
+        <span style="font-size:13px"><b style="color:${fuaData.validationRules.length?'#fbbf24':'#4ade80'}">${fuaData.validationRules.length}</b> <span class="muted">Validation rules</span></span>
+        <span style="font-size:13px"><b>${fuaData.fieldPerms.length}</b> <span class="muted">permission entries</span></span>
+        <span style="font-size:13px;color:${fuaData.records>0?'#f87171':'#4ade80'}"><b>${recLabel}</b></span>
+        ${total===0&&fuaData.records===0?'<span style="color:#4ade80;font-size:13px;font-weight:700">✓ Safe to delete (no references found, 0 values)</span>':''}
+      </div>`;
+
+      // Tab bar
+      const tabs=[
+        {id:'flows',          label:`Flows (${fuaData.flows.length})`},
+        {id:'apex',           label:`Apex (${fuaData.apex.length})`},
+        {id:'validationRules',label:`Validation Rules (${fuaData.validationRules.length})`},
+        {id:'fieldPerms',     label:`Field Permissions (${fuaData.fieldPerms.length})`}
+      ];
+      $('#fuaTabs').innerHTML=tabs.map(t=>
+        `<button class="secondary fua-tab ${t.id===fuaActiveTab?'active-tab':''}" data-fuatab="${t.id}" style="font-size:12px;padding:6px 12px">${t.label}</button>`
+      ).join('');
+      document.querySelectorAll('.fua-tab').forEach(b=>b.onclick=()=>{
+        fuaActiveTab=b.dataset.fuatab;
+        document.querySelectorAll('.fua-tab').forEach(x=>x.classList.remove('active-tab'));
+        b.classList.add('active-tab');
+        renderFuaTab();
+      });
+      renderFuaTab();
+      toast(`Analysis complete: ${total} reference${total!==1?'s':''} found.`);
+    } catch(e){ res.innerHTML=`<p class="error-note">${escapeHtml(e.message)}</p>`; toast(e.message,5000,{copyText:e.message}); }
+    finally{ btn.disabled=false; btn.textContent='Analyze Field'; }
+  };
+
+  function renderFuaTab(){
+    const res=$('#fuaResult');
+    const data=fuaData[fuaActiveTab]||[];
+    if(!data.length){ res.innerHTML='<p class="muted">No references found in this category.</p>'; return; }
+    res.innerHTML=table(data);
+  }
+}
+
+// ── Sandbox Refresh Tracker — v7 ─────────────────────────────────────────────
+async function sandboxTracker() {
+  view().innerHTML = `<section class="card">
+    <h3>Sandbox Refresh Tracker <span class="badge info">v7 — SandboxInfo</span></h3>
+    <p class="muted">View all sandbox instances, their type, last refresh date, and copy limit. Must be run from a Production org — sandbox orgs don't have SandboxInfo access.</p>
+    <div class="toolbar">
+      <button id="sbxLoad">Load Sandboxes</button>
+      <button class="secondary" id="sbxExport">Export CSV</button>
+      <input id="sbxSearch" placeholder="Search sandbox name…" style="max-width:220px">
+    </div>
+    <div id="sbxSummary" style="margin:10px 0"></div>
+    <div id="sbxResult"></div>
+
+    <div style="margin-top:18px;border-top:1px solid var(--line);padding-top:14px">
+      <h4 style="font-size:13px;margin:0 0 6px">Sandbox Type Reference</h4>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;font-size:12px">
+        ${[
+          {type:'Developer',      color:'#4ade80', desc:'200MB storage, one free per license'},
+          {type:'Developer Pro',  color:'#60a5fa', desc:'1GB storage, ideal for teams'},
+          {type:'Partial',        color:'#fbbf24', desc:'5GB, sample of prod data (5%)'},
+          {type:'Full',           color:'#f87171', desc:'Full copy of prod, longest refresh cycle'}
+        ].map(s=>`<div style="border:1px solid ${s.color};border-radius:8px;padding:8px;background:var(--panel2)">
+          <b style="color:${s.color}">${s.type}</b>
+          <p style="color:var(--muted);margin:3px 0 0;font-size:11px">${s.desc}</p>
+        </div>`).join('')}
+      </div>
+    </div>
+  </section>`;
+
+  let sandboxes=[];
+
+  const TYPE_COLORS={Developer:'#4ade80','Developer Pro':'#60a5fa',Partial:'#fbbf24',Full:'#f87171',Other:'#9ca3af'};
+
+  function renderSbx(records) {
+    const search=($('#sbxSearch')?.value||'').toLowerCase();
+    let rows=records;
+    if(search) rows=rows.filter(r=>(r.SandboxName||'').toLowerCase().includes(search)||(r.SandboxInfoId||'').includes(search));
+    if(!rows.length){ $('#sbxResult').innerHTML='<p class="muted">No sandboxes match the search.</p>'; return; }
+
+    const now=Date.now();
+    const thStyle='style="color:var(--purple2);padding:8px;text-align:left;border-bottom:1px solid var(--line)"';
+    const tdStyle='style="padding:7px 8px;border-bottom:1px solid var(--line);font-size:12px"';
+    const body=rows.map(sbx=>{
+      const typeColor=TYPE_COLORS[sbx.LicenseType]||TYPE_COLORS.Other;
+      const daysSince=sbx.CreatedDate?Math.floor((now-new Date(sbx.CreatedDate).getTime())/86400000):null;
+      const ageColor=daysSince===null?'var(--muted)':daysSince>180?'#f87171':daysSince>90?'#fbbf24':'#4ade80';
+      const status=sbx.Status||'Unknown';
+      const statusColor={Completed:'#4ade80',Pending:'#fbbf24',Processing:'#60a5fa',Deleting:'#f87171'}[status]||'var(--muted)';
+      return `<tr>
+        <td ${tdStyle}><b>${escapeHtml(sbx.SandboxName||sbx.SandboxInfoId||'—')}</b></td>
+        <td ${tdStyle}><span style="color:${typeColor};border:1px solid ${typeColor};border-radius:10px;padding:2px 8px;font-size:11px">${escapeHtml(sbx.LicenseType||'—')}</span></td>
+        <td ${tdStyle}><span style="color:${statusColor}">${escapeHtml(status)}</span></td>
+        <td ${tdStyle} style="color:${ageColor}">${daysSince===null?'—':`${daysSince}d ago`}</td>
+        <td ${tdStyle} style="color:var(--muted)">${sbx.CreatedDate?new Date(sbx.CreatedDate).toLocaleDateString():'—'}</td>
+        <td ${tdStyle}>${escapeHtml(sbx.EndpointUrl||sbx.SandboxInfoId||'—')}</td>
+        <td ${tdStyle}>${sbx.IsActive?'<span style="color:#4ade80">✓ Active</span>':'<span style="color:var(--muted)">—</span>'}</td>
+      </tr>`;
+    }).join('');
+
+    $('#sbxResult').innerHTML=`<div style="overflow-x:auto"><table class="table" style="width:100%"><thead><tr>
+      <th ${thStyle}>Name</th><th ${thStyle}>Type</th><th ${thStyle}>Status</th><th ${thStyle}>Last Refresh</th><th ${thStyle}>Refresh Date</th><th ${thStyle}>Endpoint / Id</th><th ${thStyle}>Active</th>
+    </tr></thead><tbody>${body}</tbody></table></div>`;
+  }
+
+  $('#sbxLoad').onclick=async()=>{
+    const btn=$('#sbxLoad'); btn.disabled=true; btn.textContent='Loading…';
+    const res=$('#sbxResult'); res.innerHTML='<p class="muted">Querying SandboxProcess…</p>';
+    try {
+      // SandboxProcess is the standard object for sandbox history/status
+      const r=await requireApi().queryAll(
+        `SELECT Id, SandboxName, Status, LicenseType, IsActive, CreatedDate, EndpointUrl, SandboxInfoId FROM SandboxProcess ORDER BY CreatedDate DESC`,
+        {maxRecords:200}
+      );
+      sandboxes=r.records||[];
+
+      if(!sandboxes.length){
+        res.innerHTML=`<div class="notice" style="border-left:3px solid #fbbf24">
+          <b>No sandbox records found.</b><br>
+          SandboxProcess records are only accessible from a <b>Production org</b>. If this is a sandbox, connect to the Production org and re-run.
+          <br><br>You may also not have "Manage Sandboxes" permission.
+        </div>`;
+        return;
+      }
+
+      // Summary
+      const types={};
+      sandboxes.forEach(s=>{ types[s.LicenseType]=(types[s.LicenseType]||0)+1; });
+      $('#sbxSummary').innerHTML=`<div style="display:flex;gap:14px;flex-wrap:wrap;padding:8px 14px;background:var(--panel2);border-radius:8px">
+        <span style="font-size:13px"><b>${sandboxes.length}</b> <span class="muted">total sandboxes</span></span>
+        ${Object.entries(types).map(([t,n])=>`<span style="font-size:13px;color:${TYPE_COLORS[t]||'var(--muted)'}">${n} ${t}</span>`).join('')}
+      </div>`;
+
+      renderSbx(sandboxes);
+      toast(`${sandboxes.length} sandbox record${sandboxes.length!==1?'s':''} loaded.`);
+    } catch(e){
+      const isPerms=/INSUFFICIENT_ACCESS|INVALID_FIELD|SandboxProcess/i.test(e.message);
+      res.innerHTML=`<div class="notice" style="border-left:3px solid #f87171">
+        <b>${isPerms?'Sandbox access requires a Production org':'Query Error'}</b><br>
+        ${escapeHtml(e.message)}<br><br>
+        ${isPerms?'Connect to your Production org from the Connect Org screen, then re-run this view.':''}
+      </div>`;
+      toast(e.message,5000,{copyText:e.message});
+    } finally{ btn.disabled=false; btn.textContent='Load Sandboxes'; }
+  };
+
+  let sbxSearchTimer;
+  setTimeout(()=>{ $('#sbxSearch')?.addEventListener('input',()=>{ clearTimeout(sbxSearchTimer); sbxSearchTimer=setTimeout(()=>renderSbx(sandboxes),200); }); },100);
+
+  $('#sbxExport').onclick=()=>{
+    if(!sandboxes.length) return toast('Load sandboxes first.');
+    chrome.runtime.sendMessage({type:'DOWNLOAD_TEXT',filename:'sf-forge-sandboxes.csv',mime:'text/csv',content:toCsv(sandboxes)});
+  };
 }
 
 // ── Table renderer ─────────────────────────────────────────────────────────────

@@ -244,3 +244,10 @@ kbd {
   color: var(--purple2);
   font-style: italic;
 }
+
+/* ── v6: Permission Lens + Org Change Tracker tabs/chips ────────────────── */
+.pl-tab { background: rgba(15,23,42,.75); border-color: rgba(139,92,246,.35); font-size:13px; padding:8px 16px; border-radius:12px; }
+.active-tab { background: linear-gradient(135deg,rgba(59,31,100,.85),rgba(29,43,87,.85)) !important; border-color: rgba(139,92,246,.75) !important; }
+.ct-chip { border-radius: 999px; font-weight: 700; transition: opacity .15s; }
+.active-chip { opacity: 1; }
+.pl-diff-tab { font-size:12px; padding:6px 12px; border-radius:10px; }
