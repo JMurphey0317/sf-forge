@@ -749,9 +749,6 @@ async function connectView() {
 
   bindVaultButtons();
 }
-  const stored = await readCredentialProfiles();
-  const rows   = stored.orgs || [];
-  view().innerHTML = `<div class="grid">
 
 function renderStoredVault(rows, activeKey) {
   if (!rows.length) return '<p class="muted">No stored org profiles yet. Connect an org above to save it.</p>';
