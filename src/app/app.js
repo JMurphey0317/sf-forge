@@ -667,41 +667,68 @@ async function dashboard() {
     resEl.innerHTML = '<p class="muted">Scanning open Salesforce tabs for active session cookie…</p>';
     try {
       const sfTabs = await chrome.tabs.query({});
-      const sfTab  = sfTabs.find(t => t.url && /salesforce\.com|force\.com/.test(t.url));
+      // Match any tab that looks like Salesforce (same pattern as the manifest)
+      const sfTab = sfTabs.find(t => t.url && /salesforce\.com|force\.com|visualforce\.com/i.test(new URL(t.url || 'https://x').hostname));
       if (!sfTab) {
-        resEl.innerHTML = '<p class="error-note">No open Salesforce tabs found. Log into Salesforce in a tab first, then click Extract SID again.</p>';
+        resEl.innerHTML = '<p class="error-note">No open Salesforce tabs found. Open a Salesforce org tab first, then click Extract SID again.</p>';
         return;
       }
-      const tabOrigin = new URL(sfTab.url).origin;
-      // Try to read the sid cookie from the tab's origin
-      const sidCookie = await chrome.cookies.get({ url: tabOrigin + '/', name: 'sid' }).catch(() => null);
-      if (!sidCookie?.value) {
-        resEl.innerHTML = `<p class="error-note">No sid cookie found at <b>${tabOrigin}</b>. Make sure you are logged into Salesforce in the tab (not just on the login page). You may also need to manually enter the SID using "Paste SID Manually".</p>`;
-        return;
-      }
-      // Derive instance URL
-      const rawHost    = new URL(sfTab.url).hostname;
-      const instanceUrl = rawHost.includes('lightning.force.com')
-        ? `https://${rawHost.replace(/\.lightning\.force\.com$/, '.my.salesforce.com')}`
-        : tabOrigin;
+      const tabUrl    = new URL(sfTab.url);
+      const tabOrigin = `${tabUrl.protocol}//${tabUrl.hostname}`;
 
-      // Save as a stored profile
+      // Import canonicalApiBase logic inline to compute the correct .my.salesforce.com URL
+      // Sandbox lightning: myorg--sb.lightning.force.com → myorg--sb.sandbox.my.salesforce.com
+      // Production lightning: myorg.lightning.force.com → myorg.my.salesforce.com
+      const h = tabUrl.hostname.toLowerCase();
+      let instanceUrl;
+      if (h.endsWith('.lightning.force.com') && h.includes('--')) {
+        const sub = tabUrl.hostname.replace(/\.lightning\.force\.com$/i, '');
+        instanceUrl = `https://${sub}.sandbox.my.salesforce.com`;
+      } else if (h.endsWith('.lightning.force.com')) {
+        instanceUrl = `https://${tabUrl.hostname.replace(/\.lightning\.force\.com$/i, '.my.salesforce.com')}`;
+      } else if (h.endsWith('.force.com') && !h.includes('lightning') && h.includes('--')) {
+        const sub = tabUrl.hostname.replace(/\.force\.com$/i, '');
+        instanceUrl = `https://${sub}.sandbox.my.salesforce.com`;
+      } else {
+        instanceUrl = tabOrigin;
+      }
+
+      // Try to read 'sid' cookie from both the tab origin and the canonical instance URL
+      let sidCookie = null;
+      for (const cookieUrl of [tabOrigin + '/', instanceUrl + '/']) {
+        try { sidCookie = await chrome.cookies.get({ url: cookieUrl, name: 'sid' }); } catch(_) {}
+        if (sidCookie?.value) break;
+      }
+
+      if (!sidCookie?.value) {
+        resEl.innerHTML = `<p class="error-note">
+          No <code>sid</code> cookie found on <b>${tabOrigin}</b>.<br><br>
+          <b>Common causes with SSO/MFA:</b><br>
+          • The extension needs the <code>cookies</code> permission for <b>${tabOrigin}</b> — check chrome://extensions → SF Forge → Details → Site Access<br>
+          • The tab may be on a login/callback URL still. Wait for it to fully load on the Salesforce org page, then try again.<br>
+          • Try <b>Paste SID Manually</b>: open browser DevTools on the Salesforce tab → Application → Cookies → copy the <code>sid</code> value.
+        </p>`;
+        return;
+      }
+
+      const isSandbox = h.includes('--') || h.includes('sandbox');
       const profile = await saveStoredLoginProfile(
         {
-          sessionId:   sidCookie.value,
+          sessionId:    sidCookie.value,
           instanceUrl,
-          pageOrigin:  tabOrigin,
-          hostname:    new URL(instanceUrl).hostname,
-          username:    '',
-          tabId:       sfTab.id,
+          pageOrigin:   tabOrigin,
+          hostname:     new URL(instanceUrl).hostname,
+          username:     '',
+          tabId:        sfTab.id,
           apiAvailable: true,
-          status:      'active'
+          status:       'active',
+          type:         isSandbox ? 'Sandbox' : 'Production'
         },
-        { alias: 'Recovered Session', colorTag: 'amber', rememberCredentials: false }
+        { alias: isSandbox ? 'Recovered Sandbox Session' : 'Recovered Production Session', colorTag: isSandbox ? 'amber' : 'red', rememberCredentials: false }
       );
       api = await SalesforceApi.fromStoredProfile(profile);
-      resEl.innerHTML = `<p class="badge ok">Session recovered from tab: ${escapeHtml(tabOrigin)}</p>
-        <p class="muted" style="font-size:12px">SID extracted and stored temporarily. To persist beyond this browser session, sign in via Connect Org with credentials.</p>`;
+      resEl.innerHTML = `<p class="badge ok">Session recovered from: ${escapeHtml(instanceUrl)}</p>
+        <p class="muted" style="font-size:12px">SID extracted and stored temporarily. To persist beyond this browser session, sign in via Connect Org.</p>`;
       toast('Session recovered — org is now active.');
       render();
     } catch (e) {
@@ -4647,6 +4674,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   await loadThemeSettings();
   setupKeyboardShortcuts();
   $('#connectBtn').onclick = () => { active = 'connect'; render(); };
+
+  // Stamp version from manifest — single source of truth, always in sync
+  const versionEl = $('#sfForgeVersion');
+  if (versionEl) {
+    const { version } = chrome.runtime.getManifest();
+    versionEl.textContent = `v${version}`;
+  }
+
   render();
   // Run update banner init after first render — non-blocking
   initUpdateBanner().catch(() => {});

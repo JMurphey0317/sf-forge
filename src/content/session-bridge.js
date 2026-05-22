@@ -1,14 +1,16 @@
 /**
- * SF Forge Session Bridge v1.3.0
+ * SF Forge Session Bridge v1.4.0
  *
  * Runs inside the Salesforce page. Proxies REST calls from the extension
  * so fetch() runs in the SF origin → credentials:include, no CORS.
  *
- * v1.3.0 fixes:
+ * v1.4.0:
+ *  - resolveUrl now always rewrites to the tab's own origin, preserving full
+ *    path+search so sandbox API calls (which use the canonical .sandbox.my
+ *    hostnames) are correctly rewritten to the lightning.force.com origin
+ *    where the bridge actually runs.
  *  - Guard against res being undefined before accessing res.status
- *    (prevents "HTTP undefined" when the tab's fetch context throws pre-response)
- *  - Explicit status:0 for network-level failures (was missing in some paths)
- *  - errorLabel always set to a non-undefined string
+ *  - Explicit status:0 for network-level failures
  */
 (() => {
   if (window.__sfForgeBridgeLoaded) return;
@@ -16,12 +18,19 @@
 
   const tabOrigin = `${location.protocol}//${location.hostname}`;
 
+  // Always rewrite to the tab's own origin — preserving path and query string.
+  // This is safe because the Salesforce session cookie is scoped to the tab's
+  // origin, so the API calls must originate there regardless of what host the
+  // extension computed as the "canonical" API base.
   function resolveUrl(requestedUrl) {
     try {
       const u = new URL(requestedUrl);
+      // If already same origin, return as-is
       if (u.origin === tabOrigin) return requestedUrl;
-      return `${tabOrigin}${u.pathname}${u.search}`;
+      // Rewrite origin, keep full path + search + hash
+      return `${tabOrigin}${u.pathname}${u.search}${u.hash}`;
     } catch {
+      // Relative path
       return requestedUrl.startsWith('/') ? `${tabOrigin}${requestedUrl}` : requestedUrl;
     }
   }

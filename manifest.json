@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "SF Forge",
   "version": "7.0.0",
-  "description": "Dark Fenrir Forge Salesforce productivity toolkit \u2014 v7.0.0 — Data Loader, Automation Health, User & License Audit, Who Broke It, Field Usage Analyzer, Sandbox Tracker."
+  "description": "Dark Fenrir Forge Salesforce productivity toolkit \u2014 v7.0.0 \u2014 Data Loader, Automation Health, User & License Audit, Who Broke It, Field Usage Analyzer, Sandbox Tracker.",
   "author": "Dark Fenrir Forge",
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'"
@@ -36,15 +36,21 @@
     "https://*.my.salesforce.com/services/*",
     "https://*.salesforce.com/services/*",
     "https://*.sandbox.my.salesforce.com/services/*",
+    "https://*.develop.my.salesforce.com/services/*",
+    "https://*.scratch.my.salesforce.com/services/*",
     "https://*.site.com/services/*",
     "https://*.visualforce.com/services/*",
+    "https://*.cloudforce.com/services/*",
     "https://*.force.com/*",
     "https://*.lightning.force.com/*",
     "https://*.my.salesforce.com/*",
     "https://*.salesforce.com/*",
     "https://*.sandbox.my.salesforce.com/*",
+    "https://*.develop.my.salesforce.com/*",
+    "https://*.scratch.my.salesforce.com/*",
     "https://*.site.com/*",
-    "https://*.visualforce.com/*"
+    "https://*.visualforce.com/*",
+    "https://*.cloudforce.com/*"
   ],
   "background": {
     "service_worker": "src/background/service-worker.js",
@@ -58,8 +64,11 @@
         "https://*.force.com/*",
         "https://*.my.salesforce.com/*",
         "https://*.sandbox.my.salesforce.com/*",
+        "https://*.develop.my.salesforce.com/*",
+        "https://*.scratch.my.salesforce.com/*",
         "https://*.visualforce.com/*",
-        "https://*.site.com/*"
+        "https://*.site.com/*",
+        "https://*.cloudforce.com/*"
       ],
       "js": [
         "src/content/salesforce-detector.js",

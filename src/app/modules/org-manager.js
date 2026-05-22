@@ -10,7 +10,7 @@
  * constructing API paths, but the BRIDGE always runs on the tab's origin.
  */
 
-export const SF_HOST_PATTERN = /salesforce\.com|force\.com|visualforce\.com|site\.com/i;
+export const SF_HOST_PATTERN = /salesforce\.com|force\.com|visualforce\.com|site\.com|cloudforce\.com/i;
 export const DEFAULT_API_VERSION = 'v66.0';
 
 // ── URL helpers ──────────────────────────────────────────────────────────────
@@ -31,11 +31,13 @@ export function normalizeOrgUrl(urlOrHost) {
 
 export function orgTypeFromHost(hostname = '') {
   const h = hostname.toLowerCase();
-  if (h.includes('scratch'))                               return 'Scratch Org';
-  if (h.includes('sandbox') || h.includes('--'))          return 'Sandbox';
+  // Sandbox detection must come before Production — sandbox hostnames contain '--'
+  // e.g. myorg--fullsb.sandbox.my.salesforce.com  or  myorg--fullsb.lightning.force.com
+  if (h.includes('scratch') || h.includes('.develop.'))                      return 'Scratch Org';
+  if (h.includes('sandbox') || h.includes('--') || h.includes('.test.'))    return 'Sandbox';
   if (h.includes('site.com') || (h.endsWith('.force.com') && !h.includes('lightning'))) return 'Experience/Force';
-  if (h.includes('lightning.force.com'))                  return 'Lightning';
-  if (h.includes('my.salesforce.com'))                    return 'Production';
+  if (h.includes('lightning.force.com'))                                      return 'Production';
+  if (h.includes('my.salesforce.com'))                                        return 'Production';
   return 'Salesforce';
 }
 
@@ -50,16 +52,61 @@ export function colorClassForOrg(org) {
 /**
  * Given a Lightning/VF/Force hostname, return the canonical .my.salesforce.com
  * API base URL (used for storing instanceUrl and constructing API paths).
- * The bridge always rewrites to same-origin anyway, so this is purely for storage.
+ *
+ * Key SSO/sandbox cases:
+ *   myorg.lightning.force.com              → myorg.my.salesforce.com
+ *   myorg--fullsb.lightning.force.com      → myorg--fullsb.sandbox.my.salesforce.com
+ *   myorg--fullsb.sandbox.my.salesforce.com → unchanged (already canonical)
+ *   myorg.my.salesforce.com                → unchanged
  */
 export function canonicalApiBase(hostname = '') {
   const h = hostname.toLowerCase();
-  if (h.endsWith('.lightning.force.com'))
+
+  // Already canonical sandbox API base
+  if (h.endsWith('.sandbox.my.salesforce.com')) return `https://${hostname}`;
+
+  // Already canonical production API base
+  if (h.endsWith('.my.salesforce.com') && !h.includes('--')) return `https://${hostname}`;
+
+  // Lightning sandbox: myorg--sbname.lightning.force.com → myorg--sbname.sandbox.my.salesforce.com
+  if (h.endsWith('.lightning.force.com') && h.includes('--')) {
+    const sub = hostname.replace(/\.lightning\.force\.com$/i, '');
+    return `https://${sub}.sandbox.my.salesforce.com`;
+  }
+
+  // Lightning production: myorg.lightning.force.com → myorg.my.salesforce.com
+  if (h.endsWith('.lightning.force.com')) {
     return `https://${hostname.replace(/\.lightning\.force\.com$/i, '.my.salesforce.com')}`;
-  if (h.endsWith('.visualforce.com'))
+  }
+
+  // Visualforce sandbox: myorg--sbname.visual.force.com → myorg--sbname.sandbox.my.salesforce.com
+  if (h.endsWith('.visualforce.com') && h.includes('--')) {
+    const sub = hostname.replace(/\.visualforce\.com$/i, '');
+    return `https://${sub}.sandbox.my.salesforce.com`;
+  }
+
+  // Visualforce production
+  if (h.endsWith('.visualforce.com')) {
     return `https://${hostname.replace(/\.visualforce\.com$/i, '.my.salesforce.com')}`;
-  if (h.endsWith('.force.com') && !h.includes('lightning'))
+  }
+
+  // Force.com sandbox: myorg--sbname.force.com → myorg--sbname.sandbox.my.salesforce.com
+  if (h.endsWith('.force.com') && !h.includes('lightning') && h.includes('--')) {
+    const sub = hostname.replace(/\.force\.com$/i, '');
+    return `https://${sub}.sandbox.my.salesforce.com`;
+  }
+
+  // Force.com production
+  if (h.endsWith('.force.com') && !h.includes('lightning')) {
     return `https://${hostname.replace(/\.force\.com$/i, '.my.salesforce.com')}`;
+  }
+
+  // Already on .my.salesforce.com with sandbox prefix (e.g. myorg--sb.my.salesforce.com)
+  if (h.endsWith('.my.salesforce.com') && h.includes('--')) {
+    const sub = hostname.replace(/\.my\.salesforce\.com$/i, '');
+    return `https://${sub}.sandbox.my.salesforce.com`;
+  }
+
   return `https://${hostname}`;
 }
 
@@ -137,72 +184,65 @@ export async function findSalesforceTabs() {
 
 // ── Session enrichment ────────────────────────────────────────────────────────
 // Uses the tab's own origin (via bridge rewrite) — no cross-origin fetch.
+// SSO/MFA note: after SSO redirect, the tab's pageOrigin is always the final
+// Salesforce domain (the IdP redirect completes before document_idle fires).
+// We try pageOrigin first, then apiBase, then the tab's href origin as a last resort.
 export async function enrichOrgSession(org) {
   const tabId = org.tabId;
   if (!tabId) throw new Error('No tabId for org. Refresh the org tab.');
 
-  // Use the tab's page origin as the target — bridge runs there and will
-  // rewrite any .my.salesforce.com URL back to the tab's own origin.
   const pageOrigin = org.pageOrigin || org.pageUrl || `https://${org.hostname}`;
   const apiBase    = org.instanceUrl || canonicalApiBase(org.hostname);
 
+  // Build a de-duplicated list of origins to try, most-specific first
+  const candidates = [...new Set([pageOrigin, apiBase].filter(Boolean))];
+
   let apiAvailable = false;
+  let workingOrigin = null;
   let lastError = null;
-  let lastErrorSource = null;
 
-  // 1. Health check — send to pageOrigin; bridge rewrites if needed
-  try {
-    await bridgeFetch(tabId, `${pageOrigin}/services/data/`);
-    apiAvailable = true;
-  } catch (e) {
-    lastError = e.message;
-    lastErrorSource = `/services/data/ on tab origin ${pageOrigin}`;
-    // If bridge rewrite already happened and still failed, try apiBase explicitly
-    if (apiBase !== pageOrigin) {
-      try {
-        await bridgeFetch(tabId, `${apiBase}/services/data/`);
-        apiAvailable = true;
-        lastError = null;
-        lastErrorSource = null;
-      } catch (e2) {
-        lastError = e2.message;
-        lastErrorSource = `/services/data/ on ${apiBase}`;
-      }
-    }
-  }
-
-  // 2. Identity
-  let identity = null;
-  if (apiAvailable) {
+  for (const origin of candidates) {
     try {
-      identity = await bridgeFetch(tabId, `${pageOrigin}/services/oauth2/userinfo`);
+      await bridgeFetch(tabId, `${origin}/services/data/`);
+      apiAvailable  = true;
+      workingOrigin = origin;
+      lastError     = null;
+      break;
     } catch (e) {
       lastError = e.message;
-      lastErrorSource = '/services/oauth2/userinfo';
     }
   }
 
-  // 3. Limits (non-fatal)
-  let limits = null;
-  if (apiAvailable) {
+  // Identity
+  let identity = null;
+  if (apiAvailable && workingOrigin) {
     try {
-      limits = await bridgeFetch(tabId, `${pageOrigin}/services/data/${DEFAULT_API_VERSION}/limits`);
+      identity = await bridgeFetch(tabId, `${workingOrigin}/services/oauth2/userinfo`);
+    } catch (e) {
+      lastError = e.message;
+    }
+  }
+
+  // Limits (non-fatal)
+  let limits = null;
+  if (apiAvailable && workingOrigin) {
+    try {
+      limits = await bridgeFetch(tabId, `${workingOrigin}/services/data/${DEFAULT_API_VERSION}/limits`);
     } catch (_) {}
   }
 
   return {
     ...org,
-    instanceUrl: apiBase,       // canonical base for constructing paths
-    pageOrigin,                  // actual tab origin the bridge runs on
+    instanceUrl: apiBase,
+    pageOrigin: workingOrigin || pageOrigin,
     orgId:       identity?.organization_id || null,
-    userId:      identity?.user_id || null,
+    userId:      identity?.user_id         || null,
     username:    identity?.preferred_username || identity?.email || null,
-    displayName: identity?.name || null,
+    displayName: identity?.name            || null,
     apiAvailable,
-    status: apiAvailable ? 'active' : 'expired',
+    status:       apiAvailable ? 'active' : 'expired',
     availability: apiAvailable ? 'available' : 'unavailable',
     lastError,
-    lastErrorSource,
     limits,
     healthCheckedAt: Date.now()
   };
@@ -210,37 +250,35 @@ export async function enrichOrgSession(org) {
 
 // ── Session health recheck ────────────────────────────────────────────────────
 export async function recheckSessionHealth(org) {
-  const tabId     = org.tabId;
+  const tabId      = org.tabId;
   const pageOrigin = org.pageOrigin || org.pageUrl || `https://${org.hostname}`;
-  const apiBase   = org.instanceUrl;
+  const apiBase    = org.instanceUrl || canonicalApiBase(org.hostname);
 
   if (!tabId) return { sidPresent: false, apiOk: false, identityOk: false, error: 'No tabId' };
 
-  // sid cookie check
+  // sid cookie check — try both the tab origin and the canonical base
   let sidPresent = false;
-  try {
-    const c = await chrome.cookies.get({ url: pageOrigin + '/', name: 'sid' });
-    if (!c?.value) {
-      // Also try the canonical .my.salesforce.com domain
-      const c2 = await chrome.cookies.get({ url: apiBase + '/', name: 'sid' }).catch(() => null);
-      sidPresent = !!c2?.value;
-    } else {
-      sidPresent = true;
-    }
-  } catch (_) {}
+  for (const origin of [pageOrigin, apiBase]) {
+    try {
+      const c = await chrome.cookies.get({ url: origin + '/', name: 'sid' });
+      if (c?.value) { sidPresent = true; break; }
+    } catch (_) {}
+  }
 
-  // /services/data/
-  let apiOk = false, apiError = null;
-  try {
-    await bridgeFetch(tabId, `${pageOrigin}/services/data/`);
-    apiOk = true;
-  } catch (e) { apiError = e.message; }
+  // /services/data/ — try both origins
+  let apiOk = false, apiError = null, workingOrigin = null;
+  for (const origin of [...new Set([pageOrigin, apiBase])]) {
+    try {
+      await bridgeFetch(tabId, `${origin}/services/data/`);
+      apiOk = true; workingOrigin = origin; break;
+    } catch (e) { apiError = e.message; }
+  }
 
   // /services/oauth2/userinfo
   let identityOk = false, identityError = null, identity = null;
-  if (apiOk) {
+  if (apiOk && workingOrigin) {
     try {
-      identity = await bridgeFetch(tabId, `${pageOrigin}/services/oauth2/userinfo`);
+      identity = await bridgeFetch(tabId, `${workingOrigin}/services/oauth2/userinfo`);
       identityOk = true;
     } catch (e) { identityError = e.message; }
   }
