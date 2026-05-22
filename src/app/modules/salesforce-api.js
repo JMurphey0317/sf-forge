@@ -61,8 +61,27 @@ export class SalesforceApi {
   static async fromStoredProfile(profileOrKey) {
     let profile = typeof profileOrKey === 'string' ? await getStoredOrgByKey(profileOrKey) : profileOrKey;
     if (!profile) throw new Error('Stored org profile was not found.');
+
+    // SSO sessions: find a matching open tab so we route via bridge (credentials:include)
+    // rather than Bearer token, which doesn't work for SSO cookie SIDs.
+    if (profile.ssoSession) {
+      const tabs = await findSalesforceTabs().catch(() => []);
+      const orgHost = profile.hostname || '';
+      const orgSlug = orgHost.split('.')[0]; // e.g. "trustedtechteam" from "trustedtechteam.my.salesforce.com"
+      const matchingTab = tabs.find(t => t.hostname && (t.hostname === orgHost || t.hostname.startsWith(orgSlug))) || tabs[0];
+      if (matchingTab) {
+        profile = { ...profile, tabId: matchingTab.tabId, pageOrigin: matchingTab.pageOrigin };
+      } else {
+        throw new Error(
+          'SSO session requires an open Salesforce tab. Open ' +
+          (profile.instanceUrl || 'your Salesforce org') +
+          ' in Chrome, then click Use Org again.'
+        );
+      }
+    }
+
     if (!profile.sessionId && profile.savedCredentials) profile = await refreshStoredLoginProfile(profile);
-    if (!profile.sessionId) throw new Error('Stored org session is missing. Sign in again from Connect Org.');
+    if (!profile.sessionId && !profile.tabId) throw new Error('Stored org session is missing. Sign in again from Connect Org.');
     const orgUrl = profile.instanceUrl || normalizeOrgUrl(profile.hostname);
     const api = new SalesforceApi({ orgUrl, org: { ...profile, instanceUrl: orgUrl, connectionMode: 'stored-login' } });
     await mergeOrgIntoProfiles({ ...profile, instanceUrl: orgUrl });
@@ -78,17 +97,33 @@ export class SalesforceApi {
 
   get tabId()            { return this.org?.tabId; }
   get hasStoredSession() { return !!this.org?.sessionId; }
+  // A session is "Bearer-capable" only when obtained via SOAP login (username+password).
+  // SSO/cookie sessions must route through the tab bridge (credentials:include) because
+  // the SID cookie value is not a valid OAuth Bearer token — only SOAP sessionIds are.
+  get isBearerCapable() {
+    return !!this.org?.sessionId && this.org?.connectionMode === 'stored-login' && !this.org?.ssoSession;
+  }
 
-  // Core request: stored-login → Bearer token; browser session → content-script bridge
+  // Core request routing:
+  //   SOAP-login stored sessions  → directSalesforceFetch with Authorization: Bearer
+  //   SSO/cookie sessions         → tab bridge with credentials:include (cookie sent natively)
+  //   Tab-detected sessions       → tab bridge
   async request(path, options = {}) {
     const url = path.startsWith('http') ? path : `${this.orgUrl}${path}`;
     const { headers = {}, ...rest } = options;
     const { Authorization, ...safeHeaders } = headers;
+    if (this.isBearerCapable) {
+      return directSalesforceFetch(this.org, url, { ...rest, headers: safeHeaders });
+    }
+    // SSO or tab session — use the bridge (cookie sent natively)
+    if (this.tabId) {
+      return bridgeFetch(this.tabId, url, { ...rest, headers: safeHeaders });
+    }
+    // Last resort: try Bearer with whatever sessionId we have
     if (this.hasStoredSession) {
       return directSalesforceFetch(this.org, url, { ...rest, headers: safeHeaders });
     }
-    if (!this.tabId) throw new Error('No Salesforce tab associated. Use Connect Org to sign in or open a Salesforce tab.');
-    return bridgeFetch(this.tabId, url, { ...rest, headers: safeHeaders });
+    throw new Error('No Salesforce tab associated. Use Connect Org to sign in or open a Salesforce tab.');
   }
 
   // Convenience methods

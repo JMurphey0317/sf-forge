@@ -608,7 +608,7 @@ async function connectView() {
       const colorTag = $('#ssoColor').value;
       const isSandbox = h.includes('--') || h.includes('sandbox');
 
-      // Build profile — use SID from cookie if we have it, otherwise rely on bridge session
+      // Build profile — mark as SSO so the API layer routes via bridge not Bearer token
       const profilePayload = {
         sessionId:    sidCookie?.value || '',
         instanceUrl,
@@ -621,17 +621,16 @@ async function connectView() {
         tabId:        targetTab.id,
         apiAvailable: true,
         status:       'active',
-        type:         isSandbox ? 'Sandbox' : 'Production'
+        type:         isSandbox ? 'Sandbox' : 'Production',
+        connectionMode: 'stored-login',
+        ssoSession:   true   // ← tells the API layer: route via bridge, not Bearer token
       };
 
       const profile = await saveStoredLoginProfile(profilePayload, { alias, colorTag, rememberCredentials: false });
 
-      // Connect — prefer bridge (tab) mode when tab is open; fall back to stored SID
-      if (sidCookie?.value) {
-        api = await SalesforceApi.fromStoredProfile(profile);
-      } else {
-        api = await SalesforceApi.fromOrg({ ...profilePayload, tabId: targetTab.id });
-      }
+      // Always connect SSO sessions via the tab bridge — Bearer token doesn't work for
+      // SSO cookie SIDs. fromOrg with tabId routes all requests through credentials:include.
+      api = await SalesforceApi.fromOrg({ ...profilePayload, tabId: targetTab.id });
 
       res.innerHTML = `<div style="border-left:3px solid #4ade80;padding:8px 12px;background:var(--panel2);border-radius:0 8px 8px 0">
         <b style="color:#4ade80">✓ Connected: ${escapeHtml(alias)}</b><br>
