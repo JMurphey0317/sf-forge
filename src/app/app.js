@@ -276,20 +276,32 @@ async function connect(org = null) {
     if (!org) {
       const stored = await readCredentialProfiles();
       const storedChoice = (stored.orgs || []).find(o => o.key === stored.activeKey) || (stored.orgs || [])[0];
-      if (storedChoice?.sessionId) {
-        api = await SalesforceApi.fromStoredProfile(storedChoice);
-        const h = await recheckStoredSessionHealth(api.org);
-        if (!h.apiOk && api.org.savedCredentials) {
-          const fresh = await refreshStoredLoginProfile(api.org);
-          api = await SalesforceApi.fromStoredProfile(fresh);
-        } else if (!h.apiOk) {
-          throw new Error('Stored session expired. Open Connect Org and sign in again, or save credentials for one-click refresh.');
+
+      if (storedChoice) {
+        // SSO sessions: reconnect via tab bridge — no Bearer token involved
+        if (storedChoice.ssoSession) {
+          api = await SalesforceApi.fromStoredProfile(storedChoice);
+          badge.className   = 'badge ok';
+          badge.textContent = storedChoice.alias || storedChoice.username || storedChoice.hostname;
+          render();
+          return;
         }
-        badge.className   = 'badge ok';
-        badge.textContent = 'API Available';
-        toast(`Connected to ${api.org.alias || api.org.username || api.org.hostname}`);
-        render();
-        return;
+        // SOAP sessions: Bearer health check
+        if (storedChoice.sessionId) {
+          api = await SalesforceApi.fromStoredProfile(storedChoice);
+          const h = await recheckStoredSessionHealth(api.org);
+          if (!h.apiOk && api.org.savedCredentials) {
+            const fresh = await refreshStoredLoginProfile(api.org);
+            api = await SalesforceApi.fromStoredProfile(fresh);
+          } else if (!h.apiOk) {
+            throw new Error('Stored session expired. Open Connect Org and sign in again, or save credentials for one-click refresh.');
+          }
+          badge.className   = 'badge ok';
+          badge.textContent = 'API Available';
+          toast(`Connected to ${api.org.alias || api.org.username || api.org.hostname}`);
+          render();
+          return;
+        }
       }
     }
     await refreshOrgs();
@@ -608,9 +620,14 @@ async function connectView() {
       const colorTag = $('#ssoColor').value;
       const isSandbox = h.includes('--') || h.includes('sandbox');
 
-      // Build profile — mark as SSO so the API layer routes via bridge not Bearer token
+      // Build profile.
+      // IMPORTANT: do NOT store the cookie SID as sessionId.
+      // Cookie SIDs cannot be used as Bearer tokens — they are only valid when
+      // sent as a cookie header via the browser bridge (credentials:include).
+      // Storing them as sessionId causes every tool call to fail with INVALID_SESSION_ID.
+      // We store sessionId:'' and route 100% via the tab bridge instead.
       const profilePayload = {
-        sessionId:    sidCookie?.value || '',
+        sessionId:    '',           // intentionally blank — SSO uses bridge not Bearer
         instanceUrl,
         pageOrigin:   tabOrigin,
         hostname:     new URL(instanceUrl).hostname,
@@ -623,7 +640,7 @@ async function connectView() {
         status:       'active',
         type:         isSandbox ? 'Sandbox' : 'Production',
         connectionMode: 'stored-login',
-        ssoSession:   true   // ← tells the API layer: route via bridge, not Bearer token
+        ssoSession:   true
       };
 
       const profile = await saveStoredLoginProfile(profilePayload, { alias, colorTag, rememberCredentials: false });
@@ -770,8 +787,11 @@ function renderStoredVault(rows, activeKey) {
 async function dashboard() {
   const storedData  = await readCredentialProfiles();
   const storedOrgs  = (storedData.orgs || []).map(s => ({
-    ...s, connectionMode: 'stored-login', tabId: null,
-    status: s.sessionId ? 'active' : 'expired', apiAvailable: !!s.sessionId
+    ...s, connectionMode: 'stored-login',
+    // SSO profiles have no sessionId — preserve their tabId so bridge routing works
+    tabId: s.ssoSession ? (s.tabId || null) : null,
+    status: s.sessionId || s.ssoSession ? 'active' : 'expired',
+    apiAvailable: !!(s.sessionId || s.ssoSession)
   }));
   const openCount    = orgs.length;
   const storedCount  = storedOrgs.length;

@@ -508,9 +508,17 @@ export async function directSalesforceFetch(org, pathOrUrl, options = {}) {
 
 export async function recheckStoredSessionHealth(org) {
   const result = { sidPresent: !!org?.sessionId, apiOk: false, identityOk: false, identity: null, checkedAt: Date.now() };
-  try { await directSalesforceFetch(org, '/services/data/'); result.apiOk = true; } catch (e) { result.apiError = e.message; }
-  if (result.apiOk) {
-    try { result.identity = await directSalesforceFetch(org, '/services/oauth2/userinfo'); result.identityOk = true; } catch (e) { result.identityError = e.message; }
+  // SSO sessions have no sessionId — they must use the tab bridge
+  if (org?.ssoSession && org?.tabId) {
+    try { await bridgeFetch(org.tabId, `${org.pageOrigin}/services/data/`); result.apiOk = true; } catch (e) { result.apiError = e.message; }
+    if (result.apiOk) {
+      try { result.identity = await bridgeFetch(org.tabId, `${org.pageOrigin}/services/oauth2/userinfo`); result.identityOk = true; } catch (e) { result.identityError = e.message; }
+    }
+  } else {
+    try { await directSalesforceFetch(org, '/services/data/'); result.apiOk = true; } catch (e) { result.apiError = e.message; }
+    if (result.apiOk) {
+      try { result.identity = await directSalesforceFetch(org, '/services/oauth2/userinfo'); result.identityOk = true; } catch (e) { result.identityError = e.message; }
+    }
   }
   return result;
 }
