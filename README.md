@@ -1,7 +1,7 @@
 # SF Forge v7.0.0
 
 
-## v7.0.0 — New Modules
+## v6.0.0 — New Modules
 
 ### ⇄ Permission Lens
 Inspired by SF PermLens — a full permission management suite built directly into SF Forge:
