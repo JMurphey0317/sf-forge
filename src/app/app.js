@@ -397,121 +397,361 @@ async function connectView() {
   const rows   = stored.orgs || [];
   view().innerHTML = `<div class="grid">
     <section class="card span6">
-      <h3>Connect to Org <span class="badge info">Production / Sandbox</span></h3>
-      <p class="muted">Sign in directly. SF Forge stores the org profile locally — no open tab required for reconnect.</p>
-      <div class="notice"><b>Recommended:</b> OAuth-ready connection model. Enter a Connected App Client ID below to use browser-based OAuth instead of storing passwords.</div>
-      <div class="field"><label>OAuth Client ID <span class="muted">optional</span></label><input id="oauthClientId" placeholder="Salesforce Connected App Consumer Key"></div>
-      <div class="toolbar"><button class="secondary" id="startOAuth">Start OAuth Login</button></div>
-      <div class="field"><label>Org Type</label><select id="loginType"><option value="production">Production / Developer</option><option value="sandbox">Sandbox</option></select></div>
-      <div class="field"><label>Username</label><input id="loginUsername" autocomplete="username" placeholder="name@example.com"></div>
-      <div class="field"><label>Password</label><input id="loginPassword" type="password" autocomplete="current-password" placeholder="Salesforce password"></div>
-      <div class="field"><label>Security Token <span class="muted">(often required)</span></label><input id="loginToken" type="password" placeholder="Appended to password automatically"></div>
-      <div class="field"><label>Org Alias</label><input id="loginAlias" placeholder="Full SB, Prod, UAT, Dev"></div>
-      <div class="field"><label>Color Tag</label><select id="loginColor"><option>purple</option><option>blue</option><option selected>amber</option><option>red</option><option>green</option></select></div>
-      <div class="field"><label>API Version Override <span class="muted">optional — default v66.0</span></label><input id="loginApiVersion" placeholder="v66.0"></div>
-      <label class="checkline"><input id="rememberCreds" type="checkbox"> Remember credentials locally for one-click refresh</label>
-      <small class="muted">Salesforce MFA/SSO may block username+password login. When blocked, use browser-tab detection instead.</small>
-      <div class="toolbar"><button id="doLogin">Connect &amp; Save Org</button><button class="secondary" id="detectTabsFromConnect">Detect Open Tabs Instead</button></div>
-      <div id="loginResult"></div>
+      <h3>Connect to Org <span class="badge info">Production / Sandbox / SSO</span></h3>
+      <p class="muted">Choose the method that matches how you log into Salesforce.</p>
+
+      <!-- METHOD TABS -->
+      <div class="toolbar" style="margin-bottom:16px">
+        <button id="cxTabSSO"   class="pl-tab active-tab">🔐 SSO / MFA Login</button>
+        <button id="cxTabSoap"  class="pl-tab">🔑 Username + Password</button>
+        <button id="cxTabSID"   class="pl-tab">📋 Paste Session ID</button>
+      </div>
+
+      <!-- SSO / MFA PANEL (default) -->
+      <div id="cxSSO">
+        <div class="notice" style="margin-bottom:12px">
+          <b>Works with SSO, MFA, and all custom login policies.</b><br>
+          SF Forge opens your Salesforce login page in a new tab. Once you're logged in, click <b>Detect Session</b> and the extension reads the session directly from that tab — no password ever stored.
+        </div>
+        <div class="field">
+          <label>Org Type</label>
+          <select id="ssoOrgType">
+            <option value="production">Production / Developer</option>
+            <option value="sandbox">Sandbox</option>
+            <option value="custom">Custom Domain</option>
+          </select>
+        </div>
+        <div class="field" id="ssoCustomDomainWrap" style="display:none">
+          <label>Custom Login URL</label>
+          <input id="ssoCustomDomain" placeholder="https://mycompany.my.salesforce.com">
+          <small class="muted">Enter your org's My Domain or custom login URL.</small>
+        </div>
+        <div class="field">
+          <label>Alias <span class="muted">for your reference</span></label>
+          <input id="ssoAlias" placeholder="e.g. Production, Full SB">
+        </div>
+        <div class="field">
+          <label>Color Tag</label>
+          <select id="ssoColor">
+            <option value="red"    selected>Red — Production</option>
+            <option value="amber">Amber — Sandbox</option>
+            <option value="blue">Blue — Dev</option>
+            <option value="green">Green</option>
+            <option value="purple">Purple</option>
+          </select>
+        </div>
+        <div class="toolbar">
+          <button id="ssoOpenLogin">1 · Open Login Page</button>
+          <button class="secondary" id="ssoDetect">2 · Detect Session</button>
+        </div>
+        <div id="ssoResult"></div>
+        <p class="muted" style="font-size:11px;margin-top:8px">
+          After clicking <b>Open Login Page</b>, complete your SSO/MFA login in the new tab, then come back here and click <b>Detect Session</b>.
+        </p>
+      </div>
+
+      <!-- USERNAME + PASSWORD PANEL -->
+      <div id="cxSoap" style="display:none">
+        <div class="notice" style="margin-bottom:12px;border-left-color:#fbbf24">
+          <b>Note:</b> Username+password login uses the SOAP Partner API and is blocked when SSO, MFA enforcement, or "No Password" login policies are active on your org. Use the SSO tab instead.
+        </div>
+        <div class="field"><label>Org Type</label><select id="soapOrgType"><option value="production">Production / Developer</option><option value="sandbox">Sandbox</option></select></div>
+        <div class="field"><label>Username</label><input id="soapUsername" autocomplete="username" placeholder="name@company.com"></div>
+        <div class="field"><label>Password</label><input id="soapPassword" type="password" autocomplete="current-password"></div>
+        <div class="field"><label>Security Token <span class="muted">(if required)</span></label><input id="soapToken" type="password" placeholder="Appended to password automatically"></div>
+        <div class="field"><label>Alias</label><input id="soapAlias" placeholder="Full SB, Prod, UAT"></div>
+        <div class="field"><label>Color Tag</label><select id="soapColor"><option>purple</option><option>blue</option><option selected>amber</option><option>red</option><option>green</option></select></div>
+        <label class="checkline"><input id="soapRemember" type="checkbox"> Remember credentials for one-click refresh</label>
+        <div class="toolbar"><button id="soapLogin">Connect &amp; Save</button></div>
+        <div id="soapResult"></div>
+      </div>
+
+      <!-- PASTE SID PANEL -->
+      <div id="cxSID" style="display:none">
+        <div class="notice" style="margin-bottom:12px">
+          Get the SID from: browser DevTools → Application tab → Cookies → your SF domain → <code>sid</code> value.
+        </div>
+        <div class="field"><label>Session ID (sid cookie value)</label><input id="sidValue" type="password" placeholder="00D…"></div>
+        <div class="field"><label>Instance URL</label><input id="sidInstance" placeholder="https://yourorg.my.salesforce.com"></div>
+        <div class="field"><label>Alias</label><input id="sidAlias" placeholder="Production, Full SB"></div>
+        <div class="field"><label>Color Tag</label><select id="sidColor"><option value="red" selected>Red — Production</option><option value="amber">Amber — Sandbox</option><option value="blue">Blue</option><option value="green">Green</option><option value="purple">Purple</option></select></div>
+        <div class="toolbar"><button id="sidConnect">Connect with Session ID</button></div>
+        <div id="sidResult"></div>
+      </div>
     </section>
+
     <section class="card span6">
       <h3>Stored Org Vault <span class="badge info">Local</span></h3>
-      <p class="muted">Profiles stored in this Chrome profile only. Passwords only stored when credential refresh is enabled.</p>
+      <p class="muted">Profiles stored in this Chrome profile only.</p>
       <div id="storedVault">${renderStoredVault(rows, stored.activeKey)}</div>
     </section>
   </div>`;
 
-  $('#startOAuth').onclick = async () => {
-    const clientId = $('#oauthClientId').value.trim();
-    const loginType = $('#loginType').value;
-    if (!clientId) return toast('Enter a Salesforce Connected App Client ID first.');
-    const loginBase   = loginType === 'sandbox' ? 'https://test.salesforce.com' : 'https://login.salesforce.com';
-    const redirectUri = chrome.identity?.getRedirectURL ? chrome.identity.getRedirectURL('sf-forge') : chrome.runtime.getURL('src/app/index.html');
-    const authUrl = `${loginBase}/services/oauth2/authorize?response_type=token&client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent('api refresh_token web')}&prompt=login`;
-    await chrome.storage.local.set({ sfForgeOAuthClientId: clientId });
-    chrome.tabs.create({ url: authUrl });
-    toast('OAuth login opened in new tab.');
+  // ── Tab switching ──────────────────────────────────────────────────────
+  const tabPanels = { cxTabSSO:'cxSSO', cxTabSoap:'cxSoap', cxTabSID:'cxSID' };
+  Object.entries(tabPanels).forEach(([tabId, panelId]) => {
+    document.getElementById(tabId).onclick = () => {
+      document.querySelectorAll('.pl-tab').forEach(b => b.classList.remove('active-tab'));
+      document.getElementById(tabId).classList.add('active-tab');
+      Object.values(tabPanels).forEach(p => { document.getElementById(p).style.display = 'none'; });
+      document.getElementById(panelId).style.display = '';
+    };
+  });
+
+  // Show/hide custom domain field
+  $('#ssoOrgType').onchange = () => {
+    $('#ssoCustomDomainWrap').style.display = $('#ssoOrgType').value === 'custom' ? '' : 'none';
   };
 
-  $('#doLogin').onclick = async () => {
-    const btn = $('#doLogin');
+  // ── SSO / MFA flow ────────────────────────────────────────────────────
+  let ssoLoginTabId = null;
+
+  $('#ssoOpenLogin').onclick = async () => {
+    const orgType = $('#ssoOrgType').value;
+    let loginUrl;
+    if (orgType === 'custom') {
+      const custom = $('#ssoCustomDomain').value.trim();
+      if (!custom) return toast('Enter your custom domain URL first.');
+      try {
+        const u = new URL(custom.startsWith('http') ? custom : `https://${custom}`);
+        loginUrl = `${u.origin}/`;
+      } catch { return toast('Invalid custom domain URL.'); }
+    } else if (orgType === 'sandbox') {
+      loginUrl = 'https://test.salesforce.com/';
+    } else {
+      loginUrl = 'https://login.salesforce.com/';
+    }
+
+    const tab = await chrome.tabs.create({ url: loginUrl });
+    ssoLoginTabId = tab.id;
+    $('#ssoResult').innerHTML = `<p class="muted" style="font-size:12px">
+      Login page opened (Tab ID: ${tab.id}). Complete your SSO / MFA login, then click <b>Detect Session</b>.
+    </p>`;
+    toast('Login tab opened — complete your SSO/MFA login then click Detect Session.');
+  };
+
+  $('#ssoDetect').onclick = async () => {
+    const btn = $('#ssoDetect');
+    btn.disabled = true; btn.textContent = 'Detecting…';
+    const res = $('#ssoResult');
+
+    try {
+      // Find all SF tabs — prefer the one we opened, fall back to any active SF tab
+      const allTabs = await chrome.tabs.query({});
+      const sfTabs  = allTabs.filter(t => t.url && /\.(salesforce|force|visualforce)\.com/i.test(new URL(t.url || 'https://x').hostname));
+
+      if (!sfTabs.length) {
+        res.innerHTML = `<p class="error-note">No Salesforce tabs found. Make sure you completed the SSO login and the tab is still open.</p>`;
+        return;
+      }
+
+      // Prefer the tab we opened; otherwise try the most recently active SF tab
+      const targetTab = sfTabs.find(t => t.id === ssoLoginTabId)
+        || sfTabs.find(t => t.active)
+        || sfTabs[sfTabs.length - 1];
+
+      const tabUrl    = new URL(targetTab.url);
+      const tabOrigin = `${tabUrl.protocol}//${tabUrl.hostname}`;
+      const h         = tabUrl.hostname.toLowerCase();
+
+      // Compute canonical instance URL
+      let instanceUrl;
+      if (h.endsWith('.lightning.force.com') && h.includes('--')) {
+        instanceUrl = `https://${tabUrl.hostname.replace(/\.lightning\.force\.com$/i, '.sandbox.my.salesforce.com')}`;
+      } else if (h.endsWith('.lightning.force.com')) {
+        instanceUrl = `https://${tabUrl.hostname.replace(/\.lightning\.force\.com$/i, '.my.salesforce.com')}`;
+      } else if (h.endsWith('.force.com') && h.includes('--')) {
+        instanceUrl = `https://${tabUrl.hostname.replace(/\.force\.com$/i, '.sandbox.my.salesforce.com')}`;
+      } else if (h.includes('sandbox.my.salesforce.com')) {
+        instanceUrl = tabOrigin;
+      } else {
+        instanceUrl = tabOrigin;
+      }
+
+      // Inject the bridge into the tab first (in case it wasn't loaded)
+      try {
+        await chrome.runtime.sendMessage({ type: 'INJECT_BRIDGE', tabId: targetTab.id });
+      } catch(_) {}
+      // Give it a moment to initialise
+      await new Promise(r => setTimeout(r, 400));
+
+      // Try to hit /services/data/ via the bridge to confirm session is live
+      let sessionConfirmed = false;
+      let identity = null;
+      try {
+        await bridgeFetch(targetTab.id, `${tabOrigin}/services/data/`);
+        sessionConfirmed = true;
+        try {
+          identity = await bridgeFetch(targetTab.id, `${tabOrigin}/services/oauth2/userinfo`);
+        } catch(_) {}
+      } catch(e) {
+        // Bridge call failed — fall back to cookie extraction
+      }
+
+      // Cookie extraction (works even if bridge didn't respond)
+      let sidCookie = null;
+      for (const cookieUrl of [tabOrigin + '/', instanceUrl + '/']) {
+        try { sidCookie = await chrome.cookies.get({ url: cookieUrl, name: 'sid' }); } catch(_) {}
+        if (sidCookie?.value) break;
+      }
+
+      if (!sessionConfirmed && !sidCookie?.value) {
+        res.innerHTML = `<p class="error-note">
+          Could not detect an active session on <b>${tabOrigin}</b>.<br><br>
+          Make sure you are fully logged in (past any MFA prompts) and the Salesforce home/app page is visible in the tab — not the login screen.
+          Then click <b>Detect Session</b> again.
+        </p>`;
+        return;
+      }
+
+      const alias    = $('#ssoAlias').value.trim() || (h.includes('--') ? 'Sandbox' : 'Production');
+      const colorTag = $('#ssoColor').value;
+      const isSandbox = h.includes('--') || h.includes('sandbox');
+
+      // Build profile — use SID from cookie if we have it, otherwise rely on bridge session
+      const profilePayload = {
+        sessionId:    sidCookie?.value || '',
+        instanceUrl,
+        pageOrigin:   tabOrigin,
+        hostname:     new URL(instanceUrl).hostname,
+        username:     identity?.preferred_username || identity?.email || '',
+        displayName:  identity?.name || '',
+        orgId:        identity?.organization_id || '',
+        userId:       identity?.user_id || '',
+        tabId:        targetTab.id,
+        apiAvailable: true,
+        status:       'active',
+        type:         isSandbox ? 'Sandbox' : 'Production'
+      };
+
+      const profile = await saveStoredLoginProfile(profilePayload, { alias, colorTag, rememberCredentials: false });
+
+      // Connect — prefer bridge (tab) mode when tab is open; fall back to stored SID
+      if (sidCookie?.value) {
+        api = await SalesforceApi.fromStoredProfile(profile);
+      } else {
+        api = await SalesforceApi.fromOrg({ ...profilePayload, tabId: targetTab.id });
+      }
+
+      res.innerHTML = `<div style="border-left:3px solid #4ade80;padding:8px 12px;background:var(--panel2);border-radius:0 8px 8px 0">
+        <b style="color:#4ade80">✓ Connected: ${escapeHtml(alias)}</b><br>
+        <span class="muted" style="font-size:12px">${escapeHtml(instanceUrl)}</span><br>
+        ${identity ? `<span class="muted" style="font-size:12px">${escapeHtml(identity.preferred_username || identity.email || '')}</span>` : ''}
+      </div>`;
+      toast(`Connected: ${alias}`);
+      // Refresh the vault section
+      const vaultData = await readCredentialProfiles();
+      $('#storedVault').innerHTML = renderStoredVault(vaultData.orgs || [], vaultData.activeKey);
+      bindVaultButtons();
+
+    } catch(e) {
+      res.innerHTML = `<p class="error-note">${escapeHtml(e.message)}</p>`;
+      toast(e.message, 5000, { copyText: e.message });
+    } finally {
+      btn.disabled = false; btn.textContent = '2 · Detect Session';
+    }
+  };
+
+  // ── SOAP username/password flow ───────────────────────────────────────
+  $('#soapLogin').onclick = async () => {
+    const btn = $('#soapLogin');
     btn.disabled = true; btn.textContent = 'Connecting…';
     try {
-      const loginType  = $('#loginType').value;
-      const username   = $('#loginUsername').value.trim();
-      const password   = $('#loginPassword').value;
-      const secToken   = $('#loginToken').value;
-      const alias      = $('#loginAlias').value.trim();
-      const colorTag   = $('#loginColor').value;
-      const apiVersion = ($('#loginApiVersion').value.trim()) || 'v66.0';
-      const remember   = $('#rememberCreds').checked;
-      if (!username || !password) throw new Error('Username and password are required.');
-      // salesforceSoapLogin expects a single options object
       const soapResult = await salesforceSoapLogin({
-        username, password, securityToken: secToken, loginType
+        username:      $('#soapUsername').value.trim(),
+        password:      $('#soapPassword').value,
+        securityToken: $('#soapToken').value,
+        loginType:     $('#soapOrgType').value
       });
-      // saveStoredLoginProfile(profile, options) — two separate args
+      const alias    = $('#soapAlias').value.trim();
+      const colorTag = $('#ssoColor')?.value || $('#soapColor').value;
+      const remember = $('#soapRemember').checked;
+      const profile  = await saveStoredLoginProfile(soapResult, {
+        alias, colorTag,
+        rememberCredentials: remember,
+        password:      remember ? $('#soapPassword').value : '',
+        securityToken: remember ? $('#soapToken').value    : ''
+      });
+      api = await SalesforceApi.fromStoredProfile(profile);
+      $('#soapResult').innerHTML = `<p class="badge ok">Connected: ${escapeHtml(alias || soapResult.username)}</p>`;
+      toast(`Connected: ${alias || soapResult.username}`);
+      const vaultData = await readCredentialProfiles();
+      $('#storedVault').innerHTML = renderStoredVault(vaultData.orgs || [], vaultData.activeKey);
+      bindVaultButtons();
+    } catch(e) {
+      $('#soapResult').innerHTML = `<p class="error-note">${escapeHtml(e.message)}</p>`;
+    } finally {
+      btn.disabled = false; btn.textContent = 'Connect & Save';
+    }
+  };
+
+  // ── Paste SID flow ────────────────────────────────────────────────────
+  $('#sidConnect').onclick = async () => {
+    const sid      = $('#sidValue').value.trim();
+    const instance = $('#sidInstance').value.trim();
+    const alias    = $('#sidAlias').value.trim() || 'Manual Session';
+    const colorTag = $('#sidColor').value;
+    const res      = $('#sidResult');
+    if (!sid)      return toast('Enter a Session ID.');
+    if (!instance) return toast('Enter the Instance URL.');
+    try {
+      const instanceUrl = instance.startsWith('http') ? instance : `https://${instance}`;
       const profile = await saveStoredLoginProfile(
-        { ...soapResult, apiVersion },
-        {
-          alias, colorTag,
-          rememberCredentials: remember,
-          password: remember ? password : '',
-          securityToken: remember ? secToken : ''
-        }
+        { sessionId: sid, instanceUrl, pageOrigin: instanceUrl, hostname: new URL(instanceUrl).hostname, username: '', apiAvailable: true, status: 'active' },
+        { alias, colorTag, rememberCredentials: false }
       );
       api = await SalesforceApi.fromStoredProfile(profile);
-      $('#loginResult').innerHTML = `<p class="badge ok">Connected: ${escapeHtml(alias || username)}</p>`;
-      toast(`Stored org connected: ${alias || username}`);
-      render();
-    } catch (e) {
-      $('#loginResult').innerHTML = `<p class="error-note">${escapeHtml(e.message)}</p>`;
-    } finally {
-      btn.disabled = false; btn.textContent = 'Connect & Save Org';
+      res.innerHTML = `<p class="badge ok">Connected via Session ID to ${escapeHtml(instanceUrl)}</p>`;
+      toast(`Connected: ${alias}`);
+      const vaultData = await readCredentialProfiles();
+      $('#storedVault').innerHTML = renderStoredVault(vaultData.orgs || [], vaultData.activeKey);
+      bindVaultButtons();
+    } catch(e) {
+      res.innerHTML = `<p class="error-note">${escapeHtml(e.message)}</p>`;
     }
   };
 
-  $('#detectTabsFromConnect').onclick = async () => {
-    await refreshOrgs();
-    if (!orgs.length) return toast('No Salesforce tabs found. Open a Salesforce org tab first.');
-    active = 'dashboard'; render();
-  };
-
-  document.querySelectorAll('[data-use-stored]').forEach(btn =>
-    btn.onclick = async () => {
-      try {
-        const p = (await readCredentialProfiles()).orgs?.find(o => o.key === btn.dataset.useStored);
-        if (!p) return toast('Org profile not found.');
-        api = await SalesforceApi.fromStoredProfile(p);
-        toast(`Active org: ${p.alias || p.username || p.hostname}`);
-        render();
-      } catch (e) { toast(e.message, 4000); }
-    }
-  );
-
-  document.querySelectorAll('[data-delete-stored]').forEach(btn =>
-    btn.onclick = async () => {
-      if (!confirm('Delete this stored org?')) return;
-      const key  = btn.dataset.deleteStored;
-      const data = await readCredentialProfiles();
-      const prev = data.orgs?.find(o => o.key === key);
-      data.orgs  = (data.orgs || []).filter(o => o.key !== key);
-      if (data.activeKey === key) data.activeKey = data.orgs[0]?.key || null;
-      await chrome.storage.local.set({ sfForgeCredentialProfiles: data });
-      toast('Stored org deleted.', 2800, {
-        undoFn: async () => {
-          if (prev) {
-            const d2 = await readCredentialProfiles();
-            d2.orgs = [...(d2.orgs || []), prev];
-            await chrome.storage.local.set({ sfForgeCredentialProfiles: d2 });
-            connectView();
+  function bindVaultButtons() {
+    document.querySelectorAll('[data-use-stored]').forEach(btn =>
+      btn.onclick = async () => {
+        try {
+          const p = (await readCredentialProfiles()).orgs?.find(o => o.key === btn.dataset.useStored);
+          if (!p) return toast('Org profile not found.');
+          api = await SalesforceApi.fromStoredProfile(p);
+          toast(`Active org: ${p.alias || p.username || p.hostname}`);
+          render();
+        } catch (e) { toast(e.message, 4000); }
+      }
+    );
+    document.querySelectorAll('[data-delete-stored]').forEach(btn =>
+      btn.onclick = async () => {
+        if (!confirm('Delete this stored org?')) return;
+        const key  = btn.dataset.deleteStored;
+        const data = await readCredentialProfiles();
+        const prev = data.orgs?.find(o => o.key === key);
+        data.orgs  = (data.orgs || []).filter(o => o.key !== key);
+        if (data.activeKey === key) data.activeKey = data.orgs[0]?.key || null;
+        await chrome.storage.local.set({ sfForgeCredentialProfiles: data });
+        toast('Stored org deleted.', 2800, {
+          undoFn: async () => {
+            if (prev) {
+              const d2 = await readCredentialProfiles();
+              d2.orgs  = [...(d2.orgs || []), prev];
+              await chrome.storage.local.set({ sfForgeCredentialProfiles: d2 });
+              connectView();
+            }
           }
-        }
-      });
-      connectView();
-    }
-  );
+        });
+        connectView();
+      }
+    );
+  }
+
+  bindVaultButtons();
 }
+  const stored = await readCredentialProfiles();
+  const rows   = stored.orgs || [];
+  view().innerHTML = `<div class="grid">
 
 function renderStoredVault(rows, activeKey) {
   if (!rows.length) return '<p class="muted">No stored org profiles yet. Connect an org above to save it.</p>';
