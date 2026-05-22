@@ -112,18 +112,23 @@ export class SalesforceApi {
     const url = path.startsWith('http') ? path : `${this.orgUrl}${path}`;
     const { headers = {}, ...rest } = options;
     const { Authorization, ...safeHeaders } = headers;
+
+    // Diagnostic — visible in DevTools console of the extension page
+    const route = this.isBearerCapable ? 'BEARER' : this.tabId ? `BRIDGE(tab=${this.tabId})` : 'BEARER-FALLBACK';
+    console.debug(`[SF Forge] ${route} → ${url.split('?')[0]}`);
+
     if (this.isBearerCapable) {
       return directSalesforceFetch(this.org, url, { ...rest, headers: safeHeaders });
     }
-    // SSO or tab session — use the bridge (cookie sent natively)
     if (this.tabId) {
       return bridgeFetch(this.tabId, url, { ...rest, headers: safeHeaders });
     }
-    // Last resort: try Bearer with whatever sessionId we have
+    // Last resort — no tab available, try Bearer anyway
     if (this.hasStoredSession) {
+      console.warn('[SF Forge] No tabId for SSO session — falling back to Bearer. This will likely fail. Reopen the Salesforce tab and reconnect.');
       return directSalesforceFetch(this.org, url, { ...rest, headers: safeHeaders });
     }
-    throw new Error('No Salesforce tab associated. Use Connect Org to sign in or open a Salesforce tab.');
+    throw new Error('No Salesforce tab is open. Open your Salesforce org in a browser tab, then go to Connect Org → SSO Login → Detect Session to reconnect.');
   }
 
   // Convenience methods

@@ -548,114 +548,114 @@ async function connectView() {
     const res = $('#ssoResult');
 
     try {
-      // Find all SF tabs — prefer the one we opened, fall back to any active SF tab
       const allTabs = await chrome.tabs.query({});
-      const sfTabs  = allTabs.filter(t => t.url && /\.(salesforce|force|visualforce)\.com/i.test(new URL(t.url || 'https://x').hostname));
+      const sfTabs  = allTabs.filter(t => {
+        if (!t.url) return false;
+        try { return /\.(salesforce|force|visualforce)\.com/i.test(new URL(t.url).hostname); }
+        catch { return false; }
+      });
 
       if (!sfTabs.length) {
-        res.innerHTML = `<p class="error-note">No Salesforce tabs found. Make sure you completed the SSO login and the tab is still open.</p>`;
+        res.innerHTML = `<p class="error-note">No Salesforce tabs found. Complete your SSO login in the tab first, then click Detect Session.</p>`;
         return;
       }
 
-      // Prefer the tab we opened; otherwise try the most recently active SF tab
+      // Prefer the tab we opened; otherwise most recently focused SF tab
       const targetTab = sfTabs.find(t => t.id === ssoLoginTabId)
         || sfTabs.find(t => t.active)
         || sfTabs[sfTabs.length - 1];
 
-      const tabUrl    = new URL(targetTab.url);
-      const tabOrigin = `${tabUrl.protocol}//${tabUrl.hostname}`;
-      const h         = tabUrl.hostname.toLowerCase();
+      const tabUrl  = new URL(targetTab.url);
+      const tabHost = tabUrl.hostname.toLowerCase();
 
-      // Compute canonical instance URL
+      // Canonical .my.salesforce.com instance URL (where REST API cookies live)
       let instanceUrl;
-      if (h.endsWith('.lightning.force.com') && h.includes('--')) {
+      if (tabHost.endsWith('.lightning.force.com') && tabHost.includes('--')) {
         instanceUrl = `https://${tabUrl.hostname.replace(/\.lightning\.force\.com$/i, '.sandbox.my.salesforce.com')}`;
-      } else if (h.endsWith('.lightning.force.com')) {
+      } else if (tabHost.endsWith('.lightning.force.com')) {
         instanceUrl = `https://${tabUrl.hostname.replace(/\.lightning\.force\.com$/i, '.my.salesforce.com')}`;
-      } else if (h.endsWith('.force.com') && h.includes('--')) {
+      } else if (tabHost.endsWith('.force.com') && tabHost.includes('--')) {
         instanceUrl = `https://${tabUrl.hostname.replace(/\.force\.com$/i, '.sandbox.my.salesforce.com')}`;
-      } else if (h.includes('sandbox.my.salesforce.com')) {
-        instanceUrl = tabOrigin;
       } else {
-        instanceUrl = tabOrigin;
+        instanceUrl = `${tabUrl.protocol}//${tabUrl.hostname}`;
       }
 
-      // Inject the bridge into the tab first (in case it wasn't loaded)
-      try {
-        await chrome.runtime.sendMessage({ type: 'INJECT_BRIDGE', tabId: targetTab.id });
-      } catch(_) {}
-      // Give it a moment to initialise
-      await new Promise(r => setTimeout(r, 400));
+      const isSandbox    = tabHost.includes('--') || tabHost.includes('sandbox');
+      const instanceHost = new URL(instanceUrl).hostname;
 
-      // Try to hit /services/data/ via the bridge to confirm session is live
-      let sessionConfirmed = false;
-      let identity = null;
-      try {
-        await bridgeFetch(targetTab.id, `${tabOrigin}/services/data/`);
-        sessionConfirmed = true;
+      // Inject the bridge into the detected tab and any matching .my.salesforce.com tab
+      const tabsToInject = [targetTab.id];
+      const myDomainTab  = sfTabs.find(t => {
+        try { return new URL(t.url).hostname === instanceHost && t.id !== targetTab.id; }
+        catch { return false; }
+      });
+      if (myDomainTab) tabsToInject.push(myDomainTab.id);
+
+      for (const tid of tabsToInject) {
         try {
-          identity = await bridgeFetch(targetTab.id, `${tabOrigin}/services/oauth2/userinfo`);
+          await chrome.runtime.sendMessage({ type: 'INJECT_BRIDGE', tabId: tid });
         } catch(_) {}
-      } catch(e) {
-        // Bridge call failed — fall back to cookie extraction
+      }
+      await new Promise(r => setTimeout(r, 600));
+
+      // Test session on each candidate tab/origin pair, most-specific first
+      // Prioritise the .my.salesforce.com tab over lightning — REST API cookies
+      // are reliably scoped to .my.salesforce.com
+      const candidates = [];
+      if (myDomainTab) candidates.push([myDomainTab.id, instanceUrl]);
+      candidates.push([targetTab.id, `${tabUrl.protocol}//${tabUrl.hostname}`]);
+      if (targetTab.id !== (myDomainTab?.id) ) candidates.push([targetTab.id, instanceUrl]);
+
+      let workingTabId = null, workingOrigin = null, identity = null;
+
+      for (const [tid, origin] of candidates) {
+        try {
+          await bridgeFetch(tid, `${origin}/services/data/`);
+          workingTabId  = tid;
+          workingOrigin = origin;
+          try { identity = await bridgeFetch(tid, `${origin}/services/oauth2/userinfo`); } catch(_) {}
+          break;
+        } catch(_) { /* try next */ }
       }
 
-      // Cookie extraction (works even if bridge didn't respond)
-      let sidCookie = null;
-      for (const cookieUrl of [tabOrigin + '/', instanceUrl + '/']) {
-        try { sidCookie = await chrome.cookies.get({ url: cookieUrl, name: 'sid' }); } catch(_) {}
-        if (sidCookie?.value) break;
-      }
-
-      if (!sessionConfirmed && !sidCookie?.value) {
+      if (!workingTabId) {
         res.innerHTML = `<p class="error-note">
-          Could not detect an active session on <b>${tabOrigin}</b>.<br><br>
-          Make sure you are fully logged in (past any MFA prompts) and the Salesforce home/app page is visible in the tab — not the login screen.
-          Then click <b>Detect Session</b> again.
+          <b>Session check failed — the Salesforce session appears to have expired.</b><br><br>
+          Please log back into Salesforce in your browser tab (complete any SSO/MFA steps fully until you see the Salesforce home page), then click <b>Detect Session</b> again.
         </p>`;
         return;
       }
 
-      const alias    = $('#ssoAlias').value.trim() || (h.includes('--') ? 'Sandbox' : 'Production');
+      const alias    = $('#ssoAlias').value.trim() || (isSandbox ? 'Sandbox' : 'Production');
       const colorTag = $('#ssoColor').value;
-      const isSandbox = h.includes('--') || h.includes('sandbox');
 
-      // Build profile.
-      // IMPORTANT: do NOT store the cookie SID as sessionId.
-      // Cookie SIDs cannot be used as Bearer tokens — they are only valid when
-      // sent as a cookie header via the browser bridge (credentials:include).
-      // Storing them as sessionId causes every tool call to fail with INVALID_SESSION_ID.
-      // We store sessionId:'' and route 100% via the tab bridge instead.
       const profilePayload = {
-        sessionId:    '',           // intentionally blank — SSO uses bridge not Bearer
+        sessionId:      '',          // blank — SSO routes via bridge only, never Bearer
         instanceUrl,
-        pageOrigin:   tabOrigin,
-        hostname:     new URL(instanceUrl).hostname,
-        username:     identity?.preferred_username || identity?.email || '',
-        displayName:  identity?.name || '',
-        orgId:        identity?.organization_id || '',
-        userId:       identity?.user_id || '',
-        tabId:        targetTab.id,
-        apiAvailable: true,
-        status:       'active',
-        type:         isSandbox ? 'Sandbox' : 'Production',
+        pageOrigin:     workingOrigin,
+        hostname:       instanceHost,
+        username:       identity?.preferred_username || identity?.email || '',
+        displayName:    identity?.name || '',
+        orgId:          identity?.organization_id || '',
+        userId:         identity?.user_id || '',
+        tabId:          workingTabId,
+        apiAvailable:   true,
+        status:         'active',
+        type:           isSandbox ? 'Sandbox' : 'Production',
         connectionMode: 'stored-login',
-        ssoSession:   true
+        ssoSession:     true
       };
 
-      const profile = await saveStoredLoginProfile(profilePayload, { alias, colorTag, rememberCredentials: false });
-
-      // Always connect SSO sessions via the tab bridge — Bearer token doesn't work for
-      // SSO cookie SIDs. fromOrg with tabId routes all requests through credentials:include.
-      api = await SalesforceApi.fromOrg({ ...profilePayload, tabId: targetTab.id });
+      await saveStoredLoginProfile(profilePayload, { alias, colorTag, rememberCredentials: false });
+      api = await SalesforceApi.fromOrg({ ...profilePayload, tabId: workingTabId });
 
       res.innerHTML = `<div style="border-left:3px solid #4ade80;padding:8px 12px;background:var(--panel2);border-radius:0 8px 8px 0">
         <b style="color:#4ade80">✓ Connected: ${escapeHtml(alias)}</b><br>
-        <span class="muted" style="font-size:12px">${escapeHtml(instanceUrl)}</span><br>
-        ${identity ? `<span class="muted" style="font-size:12px">${escapeHtml(identity.preferred_username || identity.email || '')}</span>` : ''}
+        <span class="muted" style="font-size:12px">${escapeHtml(instanceUrl)}</span>
+        ${identity ? `<br><span class="muted" style="font-size:12px">${escapeHtml(identity.preferred_username || identity.email || '')}</span>` : ''}
+        <br><span class="muted" style="font-size:11px">Bridge active on tab ${workingTabId} via ${escapeHtml(workingOrigin)}</span>
       </div>`;
       toast(`Connected: ${alias}`);
-      // Refresh the vault section
       const vaultData = await readCredentialProfiles();
       $('#storedVault').innerHTML = renderStoredVault(vaultData.orgs || [], vaultData.activeKey);
       bindVaultButtons();
@@ -666,7 +666,7 @@ async function connectView() {
     } finally {
       btn.disabled = false; btn.textContent = '2 · Detect Session';
     }
-  };
+  };;
 
   // ── SOAP username/password flow ───────────────────────────────────────
   $('#soapLogin').onclick = async () => {
